@@ -22,8 +22,12 @@ explains the final system from the inside out.
 9. [Theory 3.3 physical hybrid](THEORY33_HYBRID.md) — future-timelike
    currents, analytic M1 closure, hard physical gates, and characteristic
    validation.
+10. [Theory 3.3 experiment report](../THEORY33_EXPERIMENT_REPORT.md) —
+    literature-motivated nonsmooth differentiation and neural constitutive
+    experiments.
 
 Measured outputs are preserved separately:
 
 - [Progressive full-physics report](../FULL_PHYSICS_UNROLL_REPORT.md)
 - [Literal Lyapunov-conditioning report](../LYAPUNOV_CONDITIONING_REPORT.md)
+- [Theory 3.3 experiment report](../THEORY33_EXPERIMENT_REPORT.md)

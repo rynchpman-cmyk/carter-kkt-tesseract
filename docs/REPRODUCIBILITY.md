@@ -94,6 +94,19 @@ Regenerate and verify the compact controller coefficients with:
 python .\fit_theory33_basin.py
 ```
 
+Run the isolated nonsmooth and neural-constitutive experiment ladder with:
+
+```powershell
+.\run_theory33_experiments.ps1 `
+    -Output .\theory33_experiment_results.json
+```
+
+The full run trains all experimental modules and then applies the same
+128-step basin, physical, characteristic, and global-safety gates. Use
+`-Quick` for a shorter development fit with unchanged acceptance audits.
+Measurements and limitations are documented in
+[the experiment report](../THEORY33_EXPERIMENT_REPORT.md).
+
 ### 4. Theory 3.3 native Slang closure
 
 ```powershell

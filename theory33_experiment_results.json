@@ -1,0 +1,304 @@
+{
+  "format": "theory33-experiment-ladder",
+  "version": 1,
+  "quick": false,
+  "passed": true,
+  "experiments": [
+    {
+      "name": "certified_neural_kappa",
+      "passed": true,
+      "metrics": {
+        "epochs": 800,
+        "samples_per_branch": 1024,
+        "initial_rmse": 0.043711005385214954,
+        "final_rmse": 0.0001659958400214062,
+        "maximum_teacher_error": 0.0006318450556670463,
+        "monotone": true,
+        "negative_maximum_positive_slope": -0.5795315927345768,
+        "negative_maximum_absolute_slope": 0.6189195922096086,
+        "negative_certified_slope_bound": 1.5000000000000009,
+        "positive_maximum_positive_slope": -0.602700797602022,
+        "positive_maximum_absolute_slope": 0.7576606310794249,
+        "positive_certified_slope_bound": 1.5000000000000009,
+        "audit": {
+          "passed": true,
+          "basin": {
+            "interval": [
+              -1.0,
+              1.0
+            ],
+            "points": 129,
+            "steps": 128,
+            "kkt_valid": true,
+            "physical_valid": true,
+            "characteristic_valid": true,
+            "max_abs_state": 1.0383620674773668,
+            "max_lyapunov_growth": 0.6159248780920115,
+            "min_kkt_margin": 0.00035058847373364843,
+            "min_physical_margin": 4.6809744524978214e-08,
+            "max_characteristic_speed": 0.9661697702504547,
+            "terminal_max_error": 6.938893903907228e-17,
+            "converged_fraction": 1.0
+          },
+          "global_safety": {
+            "domain": "all finite float64 inputs",
+            "samples": 18,
+            "maximum_input_magnitude": 1e+300,
+            "steps": 32,
+            "all_outer_gates_fired": true,
+            "finite": true,
+            "kkt_valid": true,
+            "physical_valid": true,
+            "maximum_projected_input": 1.0,
+            "maximum_abs_after_projection": 0.1019493853061112,
+            "maximum_outer_gradient": 0.0,
+            "terminal_max_error": 6.760394619109711e-09
+          }
+        }
+      }
+    },
+    {
+      "name": "nonsmooth_boundary_vjp",
+      "passed": true,
+      "metrics": {
+        "smoothing_half_width": 0.002,
+        "boundary_count": 5,
+        "continuous_count": 3,
+        "discontinuous_count": 2,
+        "mean_branchwise_error": 44.93942749187548,
+        "mean_jump_aware_error": 0.0005425792189354831,
+        "jump_improved_every_discontinuity": true,
+        "records": [
+          {
+            "kind": "outer",
+            "boundary": -1.0,
+            "continuous": true,
+            "loss_jump": -1.7220103797115913e-16,
+            "left_derivative": 0.0,
+            "right_derivative": 8.575307120854396e-08,
+            "conservative_midpoint": 4.287653560427198e-08,
+            "branchwise_smoothed_vjp": 3.707180505213588e-08,
+            "jump_aware_smoothed_vjp": 3.707176200187639e-08,
+            "smoothed_reference": -6.95634767070694e-10,
+            "branchwise_error": 3.776743981920657e-08,
+            "jump_aware_error": 3.776739676894708e-08
+          },
+          {
+            "kind": "parity",
+            "boundary": -0.7166666666666667,
+            "continuous": false,
+            "loss_jump": 0.44939969956499404,
+            "left_derivative": 1.312830921253617e-07,
+            "right_derivative": -2.844150517388651,
+            "conservative_midpoint": -1.4220751930527795,
+            "branchwise_smoothed_vjp": -1.4140289872399339,
+            "jump_aware_smoothed_vjp": 110.93589590400858,
+            "smoothed_reference": 110.9345396980529,
+            "branchwise_error": 112.34856868529283,
+            "jump_aware_error": 0.0013562059556733175
+          },
+          {
+            "kind": "parity",
+            "boundary": 0.6166666666666666,
+            "continuous": false,
+            "loss_jump": -0.4493996994930042,
+            "left_derivative": 2.844150517388651,
+            "right_derivative": 3.722095064185575e-09,
+            "conservative_midpoint": 1.422075260555373,
+            "branchwise_smoothed_vjp": 1.4140290452173192,
+            "jump_aware_smoothed_vjp": -110.93589582803372,
+            "smoothed_reference": -110.93453968609536,
+            "branchwise_error": 112.34856873131268,
+            "jump_aware_error": 0.001356141938359201
+          },
+          {
+            "kind": "outer",
+            "boundary": 1.0,
+            "continuous": true,
+            "loss_jump": 3.222412306094243e-17,
+            "left_derivative": -1.8009483227671198e-09,
+            "right_derivative": 0.0,
+            "conservative_midpoint": -9.004741613835599e-10,
+            "branchwise_smoothed_vjp": -8.684928123134927e-10,
+            "jump_aware_smoothed_vjp": -8.684847562827275e-10,
+            "smoothed_reference": 1.650491611661013e-10,
+            "branchwise_error": 1.033541973479594e-09,
+            "jump_aware_error": 1.0335339174488287e-09
+          },
+          {
+            "kind": "kkt",
+            "boundary": -0.0009765625,
+            "continuous": true,
+            "loss_jump": -2.0534824507045107e-09,
+            "left_derivative": -0.010267396176303342,
+            "right_derivative": -0.010267428330718285,
+            "conservative_midpoint": -0.010267412253510813,
+            "branchwise_smoothed_vjp": -0.010265422833408516,
+            "jump_aware_smoothed_vjp": -0.010265936204021192,
+            "smoothed_reference": -0.010265426804306981,
+            "branchwise_error": 3.9708984659464486e-09,
+            "jump_aware_error": 5.093997142106149e-07
+          }
+        ]
+      }
+    },
+    {
+      "name": "convex_neural_dissipation",
+      "passed": true,
+      "metrics": {
+        "epochs": 700,
+        "samples": 2048,
+        "initial_response_rmse": 0.0730791253735185,
+        "final_response_rmse": 0.024101834828659116,
+        "final_value_rmse": 0.0019152811866280427,
+        "minimum_sampled_potential": 7.957485447798621e-08,
+        "minimum_sampled_hessian_eigenvalue": 0.9145378975351635,
+        "audit": {
+          "passed": true,
+          "basin": {
+            "interval": [
+              -1.0,
+              1.0
+            ],
+            "points": 129,
+            "steps": 128,
+            "kkt_valid": true,
+            "physical_valid": true,
+            "characteristic_valid": true,
+            "max_abs_state": 1.0383620674773668,
+            "max_lyapunov_growth": 0.6159248780920115,
+            "min_kkt_margin": 0.00035058847373364843,
+            "min_physical_margin": 4.6809744524978214e-08,
+            "max_characteristic_speed": 0.9661697702504547,
+            "terminal_max_error": 6.938893903907228e-17,
+            "converged_fraction": 1.0
+          },
+          "global_safety": {
+            "domain": "all finite float64 inputs",
+            "samples": 18,
+            "maximum_input_magnitude": 1e+300,
+            "steps": 32,
+            "all_outer_gates_fired": true,
+            "finite": true,
+            "kkt_valid": true,
+            "physical_valid": true,
+            "maximum_projected_input": 1.0,
+            "maximum_abs_after_projection": 0.10195653023902818,
+            "maximum_outer_gradient": 0.0,
+            "terminal_max_error": 5.448590190137992e-11
+          }
+        }
+      }
+    },
+    {
+      "name": "partially_convex_carter_master",
+      "passed": true,
+      "metrics": {
+        "epochs": 700,
+        "fit": {
+          "initial_value_rmse": 0.01913787998414369,
+          "final_value_rmse": 0.0002845888153370952,
+          "final_derivative_rmse": 0.0010200121236435965,
+          "maximum_fitted_value": 0.49982558693253626,
+          "minimum_discrete_second_difference": 9.296251815560375e-07,
+          "origin_value": 0.0,
+          "origin_derivative": 0.0
+        },
+        "energy_scale": 1e-08,
+        "maximum_scaled_residual_energy_on_fit_domain": 4.998255869325363e-09,
+        "drift_scale": 0.02,
+        "selected_amplitude": 1.0,
+        "homotopy_attempts": [
+          {
+            "amplitude": 1.0,
+            "passed": true,
+            "max_characteristic_speed": 0.9725017872304734,
+            "min_physical_margin": 1.0507876790910586e-09
+          }
+        ],
+        "audit": {
+          "passed": true,
+          "basin": {
+            "interval": [
+              -1.0,
+              1.0
+            ],
+            "points": 97,
+            "steps": 128,
+            "kkt_valid": true,
+            "physical_valid": true,
+            "characteristic_valid": true,
+            "max_abs_state": 1.02515625,
+            "max_lyapunov_growth": 0.5775205787001878,
+            "min_kkt_margin": 0.0006178139388299253,
+            "min_physical_margin": 1.0507876790910586e-09,
+            "max_characteristic_speed": 0.9725017872304734,
+            "terminal_max_error": 6.938893903907228e-17,
+            "converged_fraction": 1.0
+          },
+          "global_safety": {
+            "domain": "all finite float64 inputs",
+            "samples": 18,
+            "maximum_input_magnitude": 1e+300,
+            "steps": 32,
+            "all_outer_gates_fired": true,
+            "finite": true,
+            "kkt_valid": true,
+            "physical_valid": true,
+            "maximum_projected_input": 1.0,
+            "maximum_abs_after_projection": 0.1019534940214113,
+            "maximum_outer_gradient": 0.0,
+            "terminal_max_error": 3.1331201522100116e-11
+          }
+        }
+      }
+    },
+    {
+      "name": "explicit_two_phase_master",
+      "passed": true,
+      "metrics": {
+        "fitted_phase_threshold": 0.006,
+        "threshold_fit_mse": 0.0,
+        "phase_one_samples": 796,
+        "phase_two_samples": 230,
+        "potential_jump": 1.4988010832439613e-15,
+        "constitutive_gradient_jump_norm": 0.0020979755514963666,
+        "audit": {
+          "passed": true,
+          "basin": {
+            "interval": [
+              -1.0,
+              1.0
+            ],
+            "points": 97,
+            "steps": 128,
+            "kkt_valid": true,
+            "physical_valid": true,
+            "characteristic_valid": true,
+            "max_abs_state": 1.02515625,
+            "max_lyapunov_growth": 0.5775205787001878,
+            "min_kkt_margin": 0.0006178139388299253,
+            "min_physical_margin": 1.0507876790910586e-09,
+            "max_characteristic_speed": 0.9725017872304734,
+            "terminal_max_error": 6.938893903907228e-17,
+            "converged_fraction": 1.0
+          },
+          "global_safety": {
+            "domain": "all finite float64 inputs",
+            "samples": 18,
+            "maximum_input_magnitude": 1e+300,
+            "steps": 32,
+            "all_outer_gates_fired": true,
+            "finite": true,
+            "kkt_valid": true,
+            "physical_valid": true,
+            "maximum_projected_input": 1.0,
+            "maximum_abs_after_projection": 0.10195349400770848,
+            "maximum_outer_gradient": 0.0,
+            "terminal_max_error": 3.133111825537327e-11
+          }
+        }
+      }
+    }
+  ]
+}

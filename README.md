@@ -123,6 +123,18 @@ Validate the analytic M1 closure and its native Vulkan reverse pass with:
 .\run_theory33_slang.ps1
 ```
 
+Run the ordered nonsmooth and neural-constitutive experiment ladder with:
+
+```powershell
+.\run_theory33_experiments.ps1 `
+    -Output .\theory33_experiment_results.json
+```
+
+This tests a certified neural capture controller, a jump-aware boundary VJP,
+a convex neural dissipation potential, a partially convex Carter master
+residual, and an explicit two-phase master. See the
+[complete experiment report](THEORY33_EXPERIMENT_REPORT.md).
+
 ### Retrain the conditioned model
 
 ```powershell
@@ -186,6 +198,7 @@ For the exact environment and validation sequence, see
 | `theory33_hybrid.slang` | Native Vulkan M1 constitutive and reverse kernel |
 | `fit_theory33_basin.py` | Deterministic odd-cell gain fitting and verification |
 | `run_theory33_hybrid.py` | Literal physical-mode validation entrypoint |
+| `theory33_experiments.py` | Nonsmooth and neural-constitutive experiment ladder |
 | `migrate_full_slang.py` | Deterministic GLSL-to-Slang migration and native kernels |
 | `progressive_full_unroll.py` | Piecewise BPTT, continuation, margins, and validation |
 | `train_lyapunov_conditioned.py` | Intrinsic attractor and Lyapunov curriculum |
@@ -206,6 +219,7 @@ artifacts contain everything needed to regenerate the tracked Slang modules.
 - [System architecture](docs/ARCHITECTURE.md)
 - [Differentiation and hard decisions](docs/DIFFERENTIATION.md)
 - [Theory 3.3 physical hybrid mode](docs/THEORY33_HYBRID.md)
+- [Theory 3.3 experiment report](THEORY33_EXPERIMENT_REPORT.md)
 - [Lyapunov conditioning](docs/LYAPUNOV_CONDITIONING.md)
 - [Visualization instrument](docs/VISUALIZATION.md)
 - [Reproducibility and validation](docs/REPRODUCIBILITY.md)

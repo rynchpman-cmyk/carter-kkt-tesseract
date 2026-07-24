@@ -86,12 +86,15 @@ class ArtifactTests(unittest.TestCase):
             "run_progressive_full.ps1",
             "run_conditioned_literal.ps1",
             "fit_theory33_basin.py",
+            "run_theory33_experiments.ps1",
             "run_theory33_hybrid.ps1",
             "run_theory33_slang.ps1",
             "run_train_conditioned.ps1",
             "run_visualization.ps1",
             "FULL_PHYSICS_UNROLL_REPORT.md",
             "LYAPUNOV_CONDITIONING_REPORT.md",
+            "THEORY33_EXPERIMENT_REPORT.md",
+            "theory33_experiment_results.json",
             "tesseract_conditioning_atlas.png",
             "docs/THEORY33_HYBRID.md",
             "theory33_hybrid.slang",
@@ -107,6 +110,7 @@ class ArtifactTests(unittest.TestCase):
             (
                 ROOT / "FULL_PHYSICS_UNROLL_REPORT.md",
                 ROOT / "LYAPUNOV_CONDITIONING_REPORT.md",
+                ROOT / "THEORY33_EXPERIMENT_REPORT.md",
             )
         )
         pattern = re.compile(r"!?\[[^\]]*\]\(([^)]+)\)")

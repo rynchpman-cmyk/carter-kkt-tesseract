@@ -50,7 +50,11 @@ jobs:
           --index-url https://download.pytorch.org/whl/cpu
 
       - name: Validate physical hybrid
-        run: python -m unittest tests.test_theory33_hybrid -v
+        run: >-
+          python -m unittest
+          tests.test_theory33_hybrid
+          tests.test_theory33_experiments
+          -v
 
       - name: Regenerate broad-basin controller
         run: python fit_theory33_basin.py
