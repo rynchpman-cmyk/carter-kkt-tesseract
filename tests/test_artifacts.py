@@ -87,6 +87,8 @@ class ArtifactTests(unittest.TestCase):
             "run_conditioned_literal.ps1",
             "fit_theory33_basin.py",
             "run_theory33_experiments.ps1",
+            "run_theory33_advanced.ps1",
+            "run_theory33_frozen_slang.ps1",
             "run_theory33_hybrid.ps1",
             "run_theory33_slang.ps1",
             "run_train_conditioned.ps1",
@@ -94,7 +96,11 @@ class ArtifactTests(unittest.TestCase):
             "FULL_PHYSICS_UNROLL_REPORT.md",
             "LYAPUNOV_CONDITIONING_REPORT.md",
             "THEORY33_EXPERIMENT_REPORT.md",
+            "THEORY33_ADVANCED_REPORT.md",
             "theory33_experiment_results.json",
+            "theory33_advanced_results.json",
+            "theory33_frozen_variants.json",
+            "theory33_qualified_frozen.slang",
             "tesseract_conditioning_atlas.png",
             "docs/THEORY33_HYBRID.md",
             "theory33_hybrid.slang",
@@ -111,6 +117,7 @@ class ArtifactTests(unittest.TestCase):
                 ROOT / "FULL_PHYSICS_UNROLL_REPORT.md",
                 ROOT / "LYAPUNOV_CONDITIONING_REPORT.md",
                 ROOT / "THEORY33_EXPERIMENT_REPORT.md",
+                ROOT / "THEORY33_ADVANCED_REPORT.md",
             )
         )
         pattern = re.compile(r"!?\[[^\]]*\]\(([^)]+)\)")

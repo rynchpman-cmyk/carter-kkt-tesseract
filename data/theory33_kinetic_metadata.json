@@ -1,0 +1,35 @@
+{
+  "format": "theory33-independent-kinetic-data",
+  "version": 1,
+  "generator": "Maxwell-Juttner Gauss-Legendre moment quadrature",
+  "config": {
+    "seed": 3304,
+    "quadrature_points": 128,
+    "density_points": 7,
+    "temperature_points": 9,
+    "fraction_points": 4,
+    "drift_points": 11,
+    "trajectory_count": 72,
+    "trajectory_steps": 48,
+    "density_minimum": 0.06,
+    "density_maximum": 0.18,
+    "temperature_minimum": 0.08,
+    "temperature_maximum": 0.8,
+    "fraction_minimum": 0.025,
+    "fraction_maximum": 0.09,
+    "drift_maximum": 0.016,
+    "phase_threshold": 0.006,
+    "phase_width": 0.00025,
+    "relaxation_time": 0.35
+  },
+  "transport_rows": 2772,
+  "phase_rows": 3456,
+  "transport_sha256": "e6c9c739d61ad68f3b60ac0f52b342da1dda0702b475c3cbcd5ff05e03850bbd",
+  "phase_sha256": "f821f59fb9814e3841f5b7f500b642b9b07478daec1580733518ab5472682e0a",
+  "independence_boundary": "generator imports no Tesseract or neural constitutive module",
+  "provenance": {
+    "eos": "relativistic Maxwell-Boltzmann equilibrium moments",
+    "transport": "positive transport Gram matrix under fixed relaxation-time quadrature",
+    "phase": "seeded grouped trajectories with context-dependent latent edge and observation noise"
+  }
+}

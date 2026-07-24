@@ -19,8 +19,8 @@ safety audits at literal integration scale `1.0`.
 These are controlled numerical experiments, not a claim that a new physical
 theory has been established. In particular, the learned Carter correction is
 deliberately small, the phase data are synthetic, and the stability evidence
-is empirical on the audited domains. The private `causal_repair_solver`
-project was not imported, copied, referenced, or required.
+is empirical on the audited domains. No external private solver was imported,
+copied, referenced, or required.
 
 The machine-readable measurements are preserved in
 [`theory33_experiment_results.json`](theory33_experiment_results.json).

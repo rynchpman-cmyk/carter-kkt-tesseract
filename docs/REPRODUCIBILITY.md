@@ -107,6 +107,35 @@ The full run trains all experimental modules and then applies the same
 Measurements and limitations are documented in
 [the experiment report](../THEORY33_EXPERIMENT_REPORT.md).
 
+Generate the independent kinetic EOS, transport, and noisy phase tables:
+
+```powershell
+python .\generate_theory33_kinetic_data.py `
+    --output-directory .\data
+```
+
+Run the full frozen-constitutive qualification:
+
+```powershell
+.\run_theory33_advanced.ps1
+```
+
+This trains from the frozen tables, uses held-out trajectories, bootstraps
+phase uncertainty, compares multi-step event-gradient estimators, continues
+the Carter scale against explicit margins, writes
+`theory33_frozen_variants.json`, and then replays the artifact without
+fitting. Use `-Quick` for development resolution.
+
+Export only the qualified artifact and validate it on Vulkan:
+
+```powershell
+.\run_theory33_frozen_slang.ps1
+```
+
+See the
+[advanced qualification report](../THEORY33_ADVANCED_REPORT.md) for hashes,
+acceptance thresholds, results, and limitations.
+
 ### 4. Theory 3.3 native Slang closure
 
 ```powershell

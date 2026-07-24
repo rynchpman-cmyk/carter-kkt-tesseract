@@ -25,9 +25,13 @@ explains the final system from the inside out.
 10. [Theory 3.3 experiment report](../THEORY33_EXPERIMENT_REPORT.md) —
     literature-motivated nonsmooth differentiation and neural constitutive
     experiments.
+11. [Advanced frozen-constitutive report](../THEORY33_ADVANCED_REPORT.md) —
+    independent kinetic data, phase uncertainty, PSD mobility, event-aware
+    BPTT, margin continuation, replay, and Vulkan export.
 
 Measured outputs are preserved separately:
 
 - [Progressive full-physics report](../FULL_PHYSICS_UNROLL_REPORT.md)
 - [Literal Lyapunov-conditioning report](../LYAPUNOV_CONDITIONING_REPORT.md)
 - [Theory 3.3 experiment report](../THEORY33_EXPERIMENT_REPORT.md)
+- [Advanced frozen-constitutive report](../THEORY33_ADVANCED_REPORT.md)

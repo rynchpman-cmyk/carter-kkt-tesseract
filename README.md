@@ -135,6 +135,25 @@ a convex neural dissipation potential, a partially convex Carter master
 residual, and an explicit two-phase master. See the
 [complete experiment report](THEORY33_EXPERIMENT_REPORT.md).
 
+Run the advanced frozen-constitutive qualification pipeline with:
+
+```powershell
+.\run_theory33_advanced.ps1
+```
+
+This generates independent kinetic EOS/transport tables, trains a covariant
+PSD mobility and uncertainty-aware phase edge, compares four multi-step BPTT
+estimators, continues the Carter residual under explicit physical margins,
+and serializes the qualified result for no-fit replay. Export and validate
+that frozen result on Vulkan with:
+
+```powershell
+.\run_theory33_frozen_slang.ps1
+```
+
+See the
+[advanced qualification report](THEORY33_ADVANCED_REPORT.md).
+
 ### Retrain the conditioned model
 
 ```powershell
@@ -199,6 +218,10 @@ For the exact environment and validation sequence, see
 | `fit_theory33_basin.py` | Deterministic odd-cell gain fitting and verification |
 | `run_theory33_hybrid.py` | Literal physical-mode validation entrypoint |
 | `theory33_experiments.py` | Nonsmooth and neural-constitutive experiment ladder |
+| `theory33_kinetic_data.py` | Independent relativistic kinetic EOS/transport generator |
+| `theory33_advanced.py` | Frozen replay, PSD mobility, event BPTT, and margin continuation |
+| `theory33_frozen_variants.json` | Qualified replayable constitutive weights and evidence |
+| `theory33_qualified_frozen.slang` | Generated qualified frozen Vulkan module |
 | `migrate_full_slang.py` | Deterministic GLSL-to-Slang migration and native kernels |
 | `progressive_full_unroll.py` | Piecewise BPTT, continuation, margins, and validation |
 | `train_lyapunov_conditioned.py` | Intrinsic attractor and Lyapunov curriculum |
@@ -220,6 +243,7 @@ artifacts contain everything needed to regenerate the tracked Slang modules.
 - [Differentiation and hard decisions](docs/DIFFERENTIATION.md)
 - [Theory 3.3 physical hybrid mode](docs/THEORY33_HYBRID.md)
 - [Theory 3.3 experiment report](THEORY33_EXPERIMENT_REPORT.md)
+- [Advanced frozen-constitutive report](THEORY33_ADVANCED_REPORT.md)
 - [Lyapunov conditioning](docs/LYAPUNOV_CONDITIONING.md)
 - [Visualization instrument](docs/VISUALIZATION.md)
 - [Reproducibility and validation](docs/REPRODUCIBILITY.md)

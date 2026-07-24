@@ -54,6 +54,7 @@ jobs:
           python -m unittest
           tests.test_theory33_hybrid
           tests.test_theory33_experiments
+          tests.test_theory33_advanced
           -v
 
       - name: Regenerate broad-basin controller
