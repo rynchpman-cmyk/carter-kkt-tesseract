@@ -75,6 +75,9 @@ flowchart LR
   explosive map.
 - A separate intrinsically conditioned model that runs the literal scale-1
   map for 128+ steps.
+- A self-contained Theory 3.3 mode with future-timelike currents, an analytic
+  M1 master, physical admissibility gates, and a differentiated
+  characteristic audit.
 - A four-panel Vulkan-backed phase-space and tesseract visualization.
 
 ## Quick start
@@ -99,6 +102,25 @@ snapshot.
 
 This compiles the conditioned Slang module and runs horizons
 `1, 4, 16, 64, 128` at integration scale `1.0`.
+
+### Theory 3.3 physical hybrid
+
+```powershell
+.\run_theory33_hybrid.ps1
+```
+
+This runs the standalone physical two-current mode for 128 literal steps and
+audits every evolved state for KKT validity, timelike currents, convexity, and
+causal characteristic speeds. It also qualifies a 1,025-state initialization
+grid over `[-1, 1]` using the fitted state-dependent odd-cell capture gain.
+See
+[docs/THEORY33_HYBRID.md](docs/THEORY33_HYBRID.md).
+
+Validate the analytic M1 closure and its native Vulkan reverse pass with:
+
+```powershell
+.\run_theory33_slang.ps1
+```
 
 ### Retrain the conditioned model
 
@@ -159,6 +181,10 @@ For the exact environment and validation sequence, see
 |---|---|
 | `carter_tesseract_kkt.comp` | Canonical GLSL full-physics compute shader |
 | `hybrid_tesseract.py` | Differentiable PyTorch reference and implicit KKT VJP |
+| `theory33_hybrid.py` | Physical two-current M1 mode and characteristic audit |
+| `theory33_hybrid.slang` | Native Vulkan M1 constitutive and reverse kernel |
+| `fit_theory33_basin.py` | Deterministic odd-cell gain fitting and verification |
+| `run_theory33_hybrid.py` | Literal physical-mode validation entrypoint |
 | `migrate_full_slang.py` | Deterministic GLSL-to-Slang migration and native kernels |
 | `progressive_full_unroll.py` | Piecewise BPTT, continuation, margins, and validation |
 | `train_lyapunov_conditioned.py` | Intrinsic attractor and Lyapunov curriculum |
@@ -178,6 +204,7 @@ artifacts contain everything needed to regenerate the tracked Slang modules.
 - [Mathematical model](docs/MATHEMATICAL_MODEL.md)
 - [System architecture](docs/ARCHITECTURE.md)
 - [Differentiation and hard decisions](docs/DIFFERENTIATION.md)
+- [Theory 3.3 physical hybrid mode](docs/THEORY33_HYBRID.md)
 - [Lyapunov conditioning](docs/LYAPUNOV_CONDITIONING.md)
 - [Visualization instrument](docs/VISUALIZATION.md)
 - [Reproducibility and validation](docs/REPRODUCIBILITY.md)

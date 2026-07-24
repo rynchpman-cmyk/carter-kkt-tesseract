@@ -27,9 +27,12 @@ shader = [
 [tool.setuptools]
 py-modules = [
     "export_hybrid",
+    "fit_theory33_basin",
     "hybrid_tesseract",
     "migrate_full_slang",
     "progressive_full_unroll",
+    "run_theory33_hybrid",
+    "theory33_hybrid",
     "train_hybrid",
     "train_lyapunov_conditioned",
     "visualize_tesseract",

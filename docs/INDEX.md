@@ -19,6 +19,9 @@ explains the final system from the inside out.
    artifacts, and validation tiers.
 8. [Publishing](PUBLISHING.md) — recommended GitHub metadata and publication
    commands.
+9. [Theory 3.3 physical hybrid](THEORY33_HYBRID.md) — future-timelike
+   currents, analytic M1 closure, hard physical gates, and characteristic
+   validation.
 
 Measured outputs are preserved separately:
 

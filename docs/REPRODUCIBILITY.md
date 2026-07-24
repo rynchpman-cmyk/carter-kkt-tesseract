@@ -74,7 +74,33 @@ python .\test_hybrid.py
 Checks finite recurrence loss, exact KKT feasibility, and a local derivative
 against centered finite differences.
 
-### 3. GLSL/PyTorch parity
+### 3. Theory 3.3 physical hybrid
+
+```powershell
+.\run_theory33_hybrid.ps1
+```
+
+Runs 128 literal steps with KKT, timelike-current, convexity, causal-cone,
+principal-symbol, and Lyapunov checks. It additionally evolves a 1,025-point
+initialization grid over `[-1, 1]` and samples both characteristic branches
+over the resulting enclosure. This tier is CPU-only.
+
+Regenerate and verify the compact controller coefficients with:
+
+```powershell
+python .\fit_theory33_basin.py
+```
+
+### 4. Theory 3.3 native Slang closure
+
+```powershell
+.\run_theory33_slang.ps1
+```
+
+Checks the analytic M1 constitutive values and native reverse gradient against
+an independent float32 implementation on Vulkan.
+
+### 5. GLSL/PyTorch parity
 
 ```powershell
 python .\compare_backends.py --steps 2
@@ -82,7 +108,7 @@ python .\compare_backends.py --steps 2
 
 Checks recurrence values, active sets, and classifier masks.
 
-### 4. Native Slang reverse
+### 6. Native Slang reverse
 
 ```powershell
 .\run_full_slang.ps1
@@ -91,7 +117,7 @@ Checks recurrence values, active sets, and classifier masks.
 Checks compact/full primal equality, nonzero adjoints, all 1,287 weights, and
 finite-difference agreement.
 
-### 5. Progressive full physics
+### 7. Progressive full physics
 
 ```powershell
 .\run_progressive_full.ps1
@@ -99,7 +125,7 @@ finite-difference agreement.
 
 Runs continuation horizons and whole-trajectory BPTT audits.
 
-### 6. Conditioned literal milestone
+### 8. Conditioned literal milestone
 
 ```powershell
 .\run_conditioned_literal.ps1

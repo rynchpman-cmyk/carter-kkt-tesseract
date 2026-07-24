@@ -85,11 +85,16 @@ class ArtifactTests(unittest.TestCase):
             "run_full_slang.ps1",
             "run_progressive_full.ps1",
             "run_conditioned_literal.ps1",
+            "fit_theory33_basin.py",
+            "run_theory33_hybrid.ps1",
+            "run_theory33_slang.ps1",
             "run_train_conditioned.ps1",
             "run_visualization.ps1",
             "FULL_PHYSICS_UNROLL_REPORT.md",
             "LYAPUNOV_CONDITIONING_REPORT.md",
             "tesseract_conditioning_atlas.png",
+            "docs/THEORY33_HYBRID.md",
+            "theory33_hybrid.slang",
         )
         for relative in expected:
             with self.subTest(path=relative):

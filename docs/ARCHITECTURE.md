@@ -8,6 +8,8 @@ The project intentionally has three representations of the same system:
 |---|---|---|
 | GLSL | `carter_tesseract_kkt.comp` | Canonical physical equations and headless compute shader |
 | PyTorch | `hybrid_tesseract.py` | High-precision differentiable reference and training model |
+| Physical PyTorch | `theory33_hybrid.py` | Timelike two-current M1 closure and characteristic audit |
+| Physical Slang | `theory33_hybrid.slang` | Analytic M1 constitutive and native reverse kernel |
 | Slang | `carter_tesseract_*.slang` | Generated native Vulkan forward and reverse kernels |
 
 `migrate_full_slang.py` mechanically imports the GLSL body, specializes model
@@ -102,6 +104,13 @@ Exposes all 16 tesseract vertices for visualization. Each vertex reports:
 - `run_tesseract.py` compiles and dispatches the canonical GLSL shader.
 - `hybrid_tesseract.py` defines the neural master, exact candidate search,
   custom KKT VJP, Carter closure, recurrence, and rollout.
+- `theory33_hybrid.py` reuses the hard recurrence around a self-contained
+  physical current map, analytic M1 master, Hilbert stress, convexity gates,
+  differentiated principal-symbol audit, and a fitted state-dependent
+  odd-cell capture gain for the qualified compact initialization basin.
+- `theory33_hybrid.slang` independently evaluates the analytic M1
+  constitutive coefficients and exposes native reverse mode with respect to
+  the four physical master features.
 - `train_hybrid.py` is the initial short-horizon BPTT experiment.
 - `train_lyapunov_conditioned.py` is the scale-1 conditioning curriculum.
 - `progressive_full_unroll.py` runs hard-tape BPTT and finite-difference
