@@ -571,6 +571,7 @@
       "mobility": 0.0,
       "drift": 0.0
     },
+    "probe_tolerance": 1e-12,
     "audit": {
       "points": 65,
       "steps": 128,

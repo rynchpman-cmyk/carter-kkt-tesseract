@@ -1563,6 +1563,7 @@ def replay_frozen_artifact(
             recorded_probe["drift_energy"],
         ),
     }
+    probe_tolerance = 1.0e-12
     model = build_composed_frozen_model(
         controller=controller,
         mobility_network=mobility,
@@ -1578,7 +1579,7 @@ def replay_frozen_artifact(
     )
     covariance = mobility_covariance_audit(mobility)
     passed = (
-        max(probe_errors.values()) == 0.0
+        max(probe_errors.values()) <= probe_tolerance
         and bool(audit["qualified"])
         and bool(covariance["passed"])
     )
@@ -1586,6 +1587,7 @@ def replay_frozen_artifact(
         "passed": passed,
         "fit_executed": False,
         "probe_errors": probe_errors,
+        "probe_tolerance": probe_tolerance,
         "audit": audit,
         "mobility_covariance": covariance,
     }

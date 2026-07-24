@@ -76,7 +76,7 @@ The kinetic construction is motivated by:
 The implemented quadrature is a deliberately compact benchmark, not a
 claim to reproduce every coefficient of those works.
 
-## 1. Frozen serialization and exact replay
+## 1. Frozen serialization and deterministic replay
 
 ### Artifact contents
 
@@ -115,11 +115,14 @@ from JSON. It:
 | Controller probe error | `0.0` |
 | Mobility probe error | `0.0` |
 | Drift-network probe error | `0.0` |
+| Cross-platform probe tolerance | `1.0e-12` |
 | Covariant mobility audit | passed |
 | Full physical qualification | passed |
 
-The artifact therefore replays trained behavior exactly in float64 instead of
-using training as an implicit serialization format.
+The artifact therefore replays the same trained float64 behavior without
+using training as an implicit serialization format. Probe outputs are
+bit-identical in the recorded Windows environment and accepted within
+`1.0e-12` across math-library and PyTorch builds.
 
 ## 2. Independent kinetic EOS and transport data
 

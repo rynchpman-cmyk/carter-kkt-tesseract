@@ -95,9 +95,12 @@ class Theory33AdvancedTests(unittest.TestCase):
             audit_points=33,
             characteristic_points=5,
         )
-        self.assertTrue(replay["passed"])
+        self.assertTrue(replay["passed"], replay)
         self.assertFalse(replay["fit_executed"])
-        self.assertEqual(max(replay["probe_errors"].values()), 0.0)
+        self.assertLessEqual(
+            max(replay["probe_errors"].values()),
+            replay["probe_tolerance"],
+        )
 
 
 if __name__ == "__main__":
