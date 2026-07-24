@@ -214,8 +214,8 @@ network architecture.
 
 | File | Rows | SHA-256 |
 |---|---:|---|
-| `theory33_kinetic_transport.csv` | `2,772` | `e6c9c739d61ad68f3b60ac0f52b342da1dda0702b475c3cbcd5ff05e03850bbd` |
-| `theory33_noisy_phase_trajectories.csv` | `3,456` | `f821f59fb9814e3841f5b7f500b642b9b07478daec1580733518ab5472682e0a` |
+| `theory33_kinetic_transport.csv` | `2,772` | `c6de1e5626f4bf2e7cb829c49d0df52e02f4b84bdb8a0c25e254de64f7946a6a` |
+| `theory33_noisy_phase_trajectories.csv` | `3,456` | `440d3b29b52f66232c6e37ace3caf21d2bf8147936615b499c7ec55993b1e353` |
 
 ## 3. Held-out noisy phase inference and uncertainty
 

@@ -11,7 +11,9 @@ from typing import Any
 
 
 def literal(value: float) -> str:
-    return f"{float(value):.17g}"
+    # Slang consumes float32 constants. Nine significant digits preserve every
+    # float32 value while removing platform-libm noise from derived literals.
+    return f"{float(value):.9g}"
 
 
 def softplus(value: float) -> float:

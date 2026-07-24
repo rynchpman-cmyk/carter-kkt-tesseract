@@ -11,7 +11,7 @@ from theory33_advanced import (
     replay_frozen_artifact,
     sha256_json_payload,
 )
-from theory33_kinetic_data import sha256_file
+from theory33_kinetic_data import sha256_canonical_text
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -34,7 +34,10 @@ class Theory33AdvancedTests(unittest.TestCase):
         for dataset in self.artifact["datasets"].values():
             path = ROOT / dataset["path"]
             with self.subTest(path=path.name):
-                self.assertEqual(sha256_file(path), dataset["sha256"])
+                self.assertEqual(
+                    sha256_canonical_text(path),
+                    dataset["sha256"],
+                )
         generator = (ROOT / "theory33_kinetic_data.py").read_text(
             encoding="utf-8"
         )

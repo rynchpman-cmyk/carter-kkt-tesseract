@@ -30,7 +30,10 @@ from theory33_hybrid import (
     Theory33MasterFunction,
     Theory33Parameters,
 )
-from theory33_kinetic_data import KineticDataConfig, sha256_file
+from theory33_kinetic_data import (
+    KineticDataConfig,
+    sha256_canonical_text,
+)
 
 
 def _float(value: Tensor | float) -> float:
@@ -1457,13 +1460,13 @@ def create_frozen_artifact(
         "datasets": {
             "transport": {
                 "path": "data/theory33_kinetic_transport.csv",
-                "sha256": sha256_file(
+                "sha256": sha256_canonical_text(
                     data_directory / "theory33_kinetic_transport.csv"
                 ),
             },
             "phase": {
                 "path": "data/theory33_noisy_phase_trajectories.csv",
-                "sha256": sha256_file(
+                "sha256": sha256_canonical_text(
                     data_directory
                     / "theory33_noisy_phase_trajectories.csv"
                 ),
@@ -1536,7 +1539,7 @@ def replay_frozen_artifact(
     ) = load_frozen_variants(artifact)
     for dataset in artifact["datasets"].values():
         dataset_path = path.parent / dataset["path"]
-        if sha256_file(dataset_path) != dataset["sha256"]:
+        if sha256_canonical_text(dataset_path) != dataset["sha256"]:
             raise ValueError(f"dataset digest mismatch: {dataset_path}")
     replay_probe = _probe_outputs(controller, mobility, drift, phase)
     recorded_probe = artifact["probe_outputs"]

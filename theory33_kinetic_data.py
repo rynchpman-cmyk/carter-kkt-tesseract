@@ -340,17 +340,20 @@ def _write_csv(
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="", encoding="utf-8") as stream:
-        writer = csv.DictWriter(stream, fieldnames=fields)
+        writer = csv.DictWriter(
+            stream,
+            fieldnames=fields,
+            lineterminator="\n",
+        )
         writer.writeheader()
         writer.writerows(records)
 
 
-def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(1 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
+def sha256_canonical_text(path: Path) -> str:
+    """Hash UTF-8 text after normalizing platform newline encodings."""
+    payload = path.read_bytes().decode("utf-8")
+    payload = payload.replace("\r\n", "\n").replace("\r", "\n")
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def write_kinetic_dataset(
@@ -371,8 +374,8 @@ def write_kinetic_dataset(
         "config": asdict(config),
         "transport_rows": len(transport),
         "phase_rows": len(phase),
-        "transport_sha256": sha256_file(transport_path),
-        "phase_sha256": sha256_file(phase_path),
+        "transport_sha256": sha256_canonical_text(transport_path),
+        "phase_sha256": sha256_canonical_text(phase_path),
         "independence_boundary": (
             "generator imports no Tesseract or neural constitutive module"
         ),
