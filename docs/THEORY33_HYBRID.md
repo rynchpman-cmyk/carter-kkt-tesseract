@@ -192,6 +192,35 @@ map, or the characteristic symbol. The failed alternative—putting the same
 capacity into an unconstrained \(\Lambda_\phi\)—was rejected because it
 stabilized the scalar map while making the principal symbol non-hyperbolic.
 
+## Global absorbing gate
+
+The literal parity map cannot be globally bounded on its own. Whenever
+\(P_n=0\), its correction vanishes and arbitrarily large states follow the
+quadratic \(u_n^2+c\). The global mode therefore applies an explicit outer
+projection before any KKT or Carter evaluation:
+
+\[
+\widehat z_n=
+\begin{cases}
+z_n, & |z_n|\le 1,\\
+\operatorname{sign}(z_n), & |z_n|>1.
+\end{cases}
+\]
+
+The physical recurrence evaluates \(F(\widehat z_n)\). Consequently:
+
+- the literal conditioned map is bit-for-bit unchanged throughout
+  \([-1,1]\);
+- every finite outer input enters the qualified inner enclosure in one step;
+- KKT and Carter quantities are never evaluated at an unqualified or
+  overflow-scale coordinate;
+- the selected outer derivative is exactly zero; and
+- NaN and infinite inputs are rejected rather than silently projected.
+
+This is a visible hard safety decision, reported as `outer_safety_gate`,
+`projected_input`, and `projection_distance`. It is not represented as
+physics and is not hidden inside the master function.
+
 ## Literal validation
 
 Run:
@@ -238,6 +267,19 @@ The same command additionally evolves 1,025 evenly spaced initial states over
 | Converged grid fraction | `1.0` |
 | Terminal maximum error | `6.94e-17` |
 
+The global safety audit additionally uses 302 signed, logarithmically spaced
+outer states through magnitude \(10^{300}\):
+
+| Global property | Result |
+|---|---:|
+| All outer gates activated | yes |
+| Finite through 128 steps | all states |
+| KKT and physical validity | all states and steps |
+| Maximum projected input | `1.0` |
+| Maximum \(|z|\) after projection | `0.101953` |
+| Maximum outer derivative | `0.0` |
+| Terminal maximum error | `6.94e-17` |
+
 Validate the native GPU constitutive path with:
 
 ```powershell
@@ -266,8 +308,8 @@ particular, it does not include:
   controller, although its outputs now parameterize admissible primitives;
 - a claim that scalar recurrence time is physical coordinate or proper time;
 - a complete Slang port of the hard-KKT physical recurrence;
-- a global stability claim outside the qualified compact interval
-  \(z_0\in[-1,1]\);
+- an interpretation of the outer projection as a physical law—it is a
+  numerical absorbing gate around the qualified literal map;
 - finite-volume current conservation on a spatial grid;
 - spacetime geometry evolution;
 - vector-field evolution;
@@ -276,9 +318,10 @@ particular, it does not include:
 
 Those require a separate grid-state design and validation campaign. The
 present result establishes the physical Carter closure and its differentiable
-hard-KKT integration before that larger step. Inside the compact scalar
-domain, the dense qualification is empirical rather than a formal interval
-proof. The exact repelling parity-zero fixed point
+hard-KKT integration before that larger step. The outer projection provides a
+global absorbing construction for every finite scalar input; inside the
+compact scalar domain, the dense qualification is empirical rather than a
+formal interval proof. The exact repelling parity-zero fixed point
 \(z=0.2424950591\), and its exact preimages, remain bounded and physical but
 do not approach \(z_\star\); they form a measure-zero exception to the
 attractor statement, not to boundedness.

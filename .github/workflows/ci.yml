@@ -62,3 +62,4 @@ jobs:
           --characteristic-stride 16
           --basin-points 257
           --basin-characteristic-points 17
+          --global-exponent-points 61

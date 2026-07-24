@@ -17,6 +17,73 @@ DEFAULT_INITIAL = (-0.8, -0.2, 0.2, 0.8)
 DEFAULT_TARGET = 0.1019493853295916
 
 
+def validate_global_safety(
+    model: Theory33HybridTesseract,
+    *,
+    steps: int,
+    target: float,
+    exponent_points: int,
+) -> dict[str, object]:
+    """Exercise the constructed absorbing map up to float64 scale."""
+    if exponent_points < 2:
+        raise ValueError("global validation needs at least two exponents")
+    magnitudes = torch.logspace(
+        1.0e-6, 300.0, exponent_points, dtype=torch.float64
+    )
+    initial = torch.cat([-magnitudes.flip(0), magnitudes])
+    probe = initial.clone().requires_grad_(True)
+
+    boundary_certificates = model.boundary_certificates
+    model.boundary_certificates = False
+    try:
+        z, first_diagnostics = model.step(
+            probe,
+            detach_diagnostics=False,
+            measure_local_gain=True,
+        )
+        outer_gradient = torch.autograd.grad(z.sum(), probe)[0]
+        z = z.detach()
+        kkt_valid = bool(first_diagnostics.kkt_valid.all())
+        physical_valid = bool(first_diagnostics.physical_valid.all())
+        finite = bool(torch.isfinite(z).all())
+        maximum_abs_after_projection = float(z.abs().max())
+        all_outer_gates_fired = bool(
+            first_diagnostics.outer_safety_gate.all()
+        )
+        maximum_projected_input = float(
+            first_diagnostics.projected_input.detach().abs().max()
+        )
+        maximum_outer_gradient = float(outer_gradient.abs().max())
+
+        for _ in range(1, steps):
+            step_probe = z.detach().clone().requires_grad_(True)
+            z, diagnostics = model.step(step_probe)
+            z = z.detach()
+            finite &= bool(torch.isfinite(z).all())
+            kkt_valid &= bool(diagnostics.kkt_valid.all())
+            physical_valid &= bool(diagnostics.physical_valid.all())
+            maximum_abs_after_projection = max(
+                maximum_abs_after_projection, float(z.abs().max())
+            )
+    finally:
+        model.boundary_certificates = boundary_certificates
+
+    return {
+        "domain": "all finite float64 inputs",
+        "samples": int(initial.numel()),
+        "maximum_input_magnitude": float(initial.abs().max()),
+        "steps": steps,
+        "all_outer_gates_fired": all_outer_gates_fired,
+        "finite": finite,
+        "kkt_valid": kkt_valid,
+        "physical_valid": physical_valid,
+        "maximum_projected_input": maximum_projected_input,
+        "maximum_abs_after_projection": maximum_abs_after_projection,
+        "maximum_outer_gradient": maximum_outer_gradient,
+        "terminal_max_error": float((z - target).abs().max()),
+    }
+
+
 def validate_broad_basin(
     model: Theory33HybridTesseract,
     *,
@@ -137,6 +204,7 @@ def validate(
     characteristic_stride: int,
     basin_points: int,
     basin_characteristic_points: int,
+    global_exponent_points: int,
 ) -> dict[str, object]:
     model = Theory33HybridTesseract(
         learn_dynamics=False,
@@ -262,6 +330,13 @@ def validate(
             points=basin_points,
             characteristic_points=basin_characteristic_points,
         )
+    if global_exponent_points > 0:
+        metrics["global_safety"] = validate_global_safety(
+            model,
+            steps=steps,
+            target=target,
+            exponent_points=global_exponent_points,
+        )
     return metrics
 
 
@@ -293,6 +368,12 @@ def parse_args() -> argparse.Namespace:
         default=33,
         help="states per branch in the broad-domain characteristic audit",
     )
+    parser.add_argument(
+        "--global-exponent-points",
+        type=int,
+        default=151,
+        help="log-spaced positive magnitudes (plus negatives); 0 disables",
+    )
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
     if args.steps < 1:
@@ -303,6 +384,8 @@ def parse_args() -> argparse.Namespace:
         parser.error("--basin-points must be zero or at least two")
     if args.basin_characteristic_points < 0:
         parser.error("--basin-characteristic-points cannot be negative")
+    if args.global_exponent_points != 0 and args.global_exponent_points < 2:
+        parser.error("--global-exponent-points must be zero or at least two")
     return args
 
 
@@ -315,6 +398,7 @@ def main() -> int:
         characteristic_stride=args.characteristic_stride,
         basin_points=args.basin_points,
         basin_characteristic_points=args.basin_characteristic_points,
+        global_exponent_points=args.global_exponent_points,
     )
     rendered = json.dumps(metrics, indent=2)
     print(rendered)
@@ -338,6 +422,22 @@ def main() -> int:
             raise RuntimeError("broad-basin rollout escaped its enclosure")
         if float(basin["converged_fraction"]) < 0.999:
             raise RuntimeError("broad-basin convergence target was missed")
+    global_safety = metrics.get("global_safety")
+    if isinstance(global_safety, dict):
+        if not bool(global_safety["all_outer_gates_fired"]):
+            raise RuntimeError("an outer safety gate failed to activate")
+        if not bool(global_safety["finite"]):
+            raise RuntimeError("global safety rollout became non-finite")
+        if not bool(global_safety["kkt_valid"]):
+            raise RuntimeError("global safety rollout lost KKT validity")
+        if not bool(global_safety["physical_valid"]):
+            raise RuntimeError("global safety rollout became non-physical")
+        if float(global_safety["maximum_projected_input"]) > 1.0:
+            raise RuntimeError("global projection exceeded its inner radius")
+        if float(global_safety["maximum_abs_after_projection"]) > 1.051:
+            raise RuntimeError("global rollout escaped the absorbing enclosure")
+        if float(global_safety["maximum_outer_gradient"]) != 0.0:
+            raise RuntimeError("outer projection sensitivity is nonzero")
     return 0
 
 

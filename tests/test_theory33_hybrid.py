@@ -215,6 +215,82 @@ class Theory33HybridTests(unittest.TestCase):
         self.assertEqual(float(metrics["converged_fraction"]), 1.0)
         self.assertLess(float(metrics["terminal_max_error"]), 1.0e-14)
 
+    def test_global_gate_preserves_the_inner_literal_map(self) -> None:
+        z = torch.linspace(-1.0, 1.0, 65)
+        inner, diagnostics = self.model.step(
+            z.clone().requires_grad_(True)
+        )
+        self.model.global_safety_conditioning = False
+        try:
+            literal, literal_diagnostics = self.model.step(
+                z.clone().requires_grad_(True)
+            )
+        finally:
+            self.model.global_safety_conditioning = True
+        torch.testing.assert_close(inner, literal, rtol=0.0, atol=0.0)
+        self.assertFalse(bool(diagnostics.outer_safety_gate.any()))
+        torch.testing.assert_close(
+            diagnostics.projected_input, z, rtol=0.0, atol=0.0
+        )
+        torch.testing.assert_close(
+            diagnostics.kkt_feasibility_margin,
+            literal_diagnostics.kkt_feasibility_margin,
+            rtol=0.0,
+            atol=0.0,
+        )
+
+    def test_global_gate_absorbs_extreme_finite_inputs(self) -> None:
+        initial = torch.tensor(
+            [
+                -1.0e300,
+                -1.0e100,
+                -1.000001,
+                1.000001,
+                1.0e100,
+                1.0e300,
+            ],
+            requires_grad=True,
+        )
+        z, diagnostics = self.model.step(
+            initial,
+            detach_diagnostics=False,
+            measure_local_gain=True,
+        )
+        gradient = torch.autograd.grad(z.sum(), initial)[0]
+        self.assertTrue(bool(diagnostics.outer_safety_gate.all()))
+        self.assertTrue(bool(diagnostics.kkt_valid.all()))
+        self.assertTrue(bool(diagnostics.physical_valid.all()))
+        self.assertTrue(bool(torch.isfinite(z).all()))
+        torch.testing.assert_close(
+            diagnostics.projected_input.abs(),
+            torch.ones_like(initial),
+            rtol=0.0,
+            atol=0.0,
+        )
+        torch.testing.assert_close(
+            gradient, torch.zeros_like(gradient), rtol=0.0, atol=0.0
+        )
+        assert diagnostics.local_gain is not None
+        torch.testing.assert_close(
+            diagnostics.local_gain,
+            torch.zeros_like(diagnostics.local_gain),
+            rtol=0.0,
+            atol=0.0,
+        )
+        for _ in range(127):
+            z, diagnostics = self.model.step(
+                z.detach().requires_grad_(True)
+            )
+            self.assertTrue(bool(torch.isfinite(z).all()))
+            self.assertTrue(bool(diagnostics.kkt_valid.all()))
+            self.assertTrue(bool(diagnostics.physical_valid.all()))
+        torch.testing.assert_close(
+            z.detach(),
+            torch.full_like(z, 0.1019493853295916),
+            rtol=0.0,
+            atol=2.0e-15,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

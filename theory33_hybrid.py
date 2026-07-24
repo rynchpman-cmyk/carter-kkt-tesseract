@@ -137,6 +137,9 @@ class Theory33StepDiagnostics(StepDiagnostics):
     current_normalization_error: Tensor
     characteristic_valid: Tensor | None
     maximum_characteristic_speed: Tensor | None
+    outer_safety_gate: Tensor
+    projected_input: Tensor
+    projection_distance: Tensor
 
 
 class BroadBasinKappaController(nn.Module):
@@ -521,8 +524,12 @@ class Theory33HybridTesseract(HybridTesseract):
         learn_master_residual: bool = False,
         broad_basin_conditioning: bool = True,
         learn_conditioner: bool = False,
+        global_safety_conditioning: bool = True,
+        outer_safety_radius: float = 1.0,
         boundary_certificates: bool = True,
     ) -> None:
+        if outer_safety_radius <= 0.0:
+            raise ValueError("outer_safety_radius must be positive")
         super().__init__(
             master_width=master_width,
             learn_dynamics=learn_dynamics,
@@ -536,8 +543,12 @@ class Theory33HybridTesseract(HybridTesseract):
             learn_residual=learn_master_residual,
         )
         self.broad_basin_conditioning = broad_basin_conditioning
+        self.global_safety_conditioning = global_safety_conditioning
         self.kappa_controller = BroadBasinKappaController(
             learnable=learn_conditioner
+        )
+        self.register_buffer(
+            "outer_safety_radius", torch.tensor(outer_safety_radius)
         )
         # Use the same intrinsic stable even-cell core as the conditioned
         # public baseline. Odd-cell capture is supplied by the physical
@@ -1010,12 +1021,30 @@ class Theory33HybridTesseract(HybridTesseract):
         measure_local_gain: bool = False,
         audit_characteristics: bool = False,
     ) -> tuple[Tensor, Theory33StepDiagnostics]:
+        if not bool(torch.isfinite(z).all()):
+            raise ValueError("z must contain only finite values")
+        original_z = z
+        outer_safety_gate = (
+            original_z.abs() > self.outer_safety_radius
+            if self.global_safety_conditioning
+            else torch.zeros_like(original_z, dtype=torch.bool)
+        ).detach()
+        projected_input = torch.where(
+            outer_safety_gate,
+            original_z.sign() * self.outer_safety_radius,
+            original_z,
+        )
+        projection_distance = (original_z - projected_input).abs()
         result, diagnostics = super().step(
-            z,
+            projected_input,
             detach_diagnostics=detach_diagnostics,
             measure_local_gain=measure_local_gain,
         )
-        probe = z if z.requires_grad else z.requires_grad_()
+        probe = (
+            projected_input
+            if projected_input.requires_grad
+            else projected_input.requires_grad_()
+        )
         sigma = torch.where(
             probe.detach().ge(0),
             torch.ones_like(probe),
@@ -1079,7 +1108,7 @@ class Theory33HybridTesseract(HybridTesseract):
                     )
                 ],
                 dtype=torch.bool,
-                device=z.device,
+                device=projected_input.device,
             )
             maximum_characteristic_speed = torch.tensor(
                 [
@@ -1091,15 +1120,21 @@ class Theory33HybridTesseract(HybridTesseract):
                         audits, opposite_audits, strict=True
                     )
                 ],
-                dtype=z.dtype,
-                device=z.device,
+                dtype=projected_input.dtype,
+                device=projected_input.device,
             )
 
         def maybe_detach(value: Tensor) -> Tensor:
             return value.detach() if detach_diagnostics else value
 
+        base_diagnostics = dict(diagnostics.__dict__)
+        if base_diagnostics["local_gain"] is not None:
+            base_diagnostics["local_gain"] = (
+                base_diagnostics["local_gain"]
+                * (~outer_safety_gate).to(projected_input.dtype)
+            )
         return result, Theory33StepDiagnostics(
-            **diagnostics.__dict__,
+            **base_diagnostics,
             physical_valid=(
                 active.physical_valid & opposite.physical_valid
             ).detach(),
@@ -1150,4 +1185,7 @@ class Theory33HybridTesseract(HybridTesseract):
                 if maximum_characteristic_speed is None
                 else maximum_characteristic_speed.detach()
             ),
+            outer_safety_gate=outer_safety_gate,
+            projected_input=maybe_detach(projected_input),
+            projection_distance=maybe_detach(projection_distance),
         )

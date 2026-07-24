@@ -83,7 +83,10 @@ against centered finite differences.
 Runs 128 literal steps with KKT, timelike-current, convexity, causal-cone,
 principal-symbol, and Lyapunov checks. It additionally evolves a 1,025-point
 initialization grid over `[-1, 1]` and samples both characteristic branches
-over the resulting enclosure. This tier is CPU-only.
+over the resulting enclosure. Finally, it sends signed log-spaced inputs
+through magnitude `1e300` through the global absorbing gate and verifies
+finite evolution, zero outer sensitivity, and physical validity. This tier is
+CPU-only.
 
 Regenerate and verify the compact controller coefficients with:
 

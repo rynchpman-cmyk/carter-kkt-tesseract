@@ -112,7 +112,8 @@ This compiles the conditioned Slang module and runs horizons
 This runs the standalone physical two-current mode for 128 literal steps and
 audits every evolved state for KKT validity, timelike currents, convexity, and
 causal characteristic speeds. It also qualifies a 1,025-state initialization
-grid over `[-1, 1]` using the fitted state-dependent odd-cell capture gain.
+grid over `[-1, 1]` using the fitted state-dependent odd-cell capture gain,
+then tests the global absorbing gate through signed magnitude `1e300`.
 See
 [docs/THEORY33_HYBRID.md](docs/THEORY33_HYBRID.md).
 

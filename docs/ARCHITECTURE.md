@@ -107,7 +107,9 @@ Exposes all 16 tesseract vertices for visualization. Each vertex reports:
 - `theory33_hybrid.py` reuses the hard recurrence around a self-contained
   physical current map, analytic M1 master, Hilbert stress, convexity gates,
   differentiated principal-symbol audit, and a fitted state-dependent
-  odd-cell capture gain for the qualified compact initialization basin.
+  odd-cell capture gain for the qualified compact initialization basin. A
+  separate hard outer projection maps every finite scalar input into that
+  basin before physical evaluation.
 - `theory33_hybrid.slang` independently evaluates the analytic M1
   constitutive coefficients and exposes native reverse mode with respect to
   the four physical master features.
