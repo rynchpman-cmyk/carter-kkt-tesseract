@@ -1,0 +1,24 @@
+cff-version: 1.2.0
+message: "If you use this software in research, please cite it using the metadata below."
+title: "Carter/KKT Tesseract"
+abstract: >-
+  A hard-constrained differentiable Carter/KKT Vulkan simulator evolved from
+  a parity-gated scalar recurrence, with piecewise-constant hard decisions,
+  progressive full-physics unrolling, and Lyapunov-conditioned dynamics.
+type: software
+authors:
+  - name: "rynchpman-cmyk"
+    website: "https://github.com/rynchpman-cmyk"
+repository-code: "https://github.com/rynchpman-cmyk/carter-kkt-tesseract"
+url: "https://github.com/rynchpman-cmyk/carter-kkt-tesseract"
+license: Apache-2.0
+version: 0.1.0
+date-released: 2026-07-24
+keywords:
+  - automatic differentiation
+  - differentiable physics
+  - dynamical systems
+  - KKT conditions
+  - Lyapunov conditioning
+  - Slang
+  - Vulkan
