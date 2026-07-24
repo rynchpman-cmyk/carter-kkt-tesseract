@@ -1,0 +1,44 @@
+name: Bug report
+description: Report a reproducible physics, KKT, differentiation, or tooling problem.
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: dropdown
+    id: subsystem
+    attributes:
+      label: Subsystem
+      options:
+        - GLSL/Vulkan forward
+        - Slang forward/reverse
+        - PyTorch reference
+        - KKT active set
+        - Lyapunov training
+        - Visualization
+        - Documentation/tooling
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: What happened and what did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: Include the exact command, initial states, horizon, and model.
+      render: powershell
+    validations:
+      required: true
+  - type: textarea
+    id: certificates
+    attributes:
+      label: Certificates and margins
+      description: Include KKT validity, masks, margins, parity cell, and condition estimate when available.
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, Python, GPU, driver, SlangPy, and PyTorch versions.

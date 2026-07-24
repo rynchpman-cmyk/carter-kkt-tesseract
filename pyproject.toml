@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "carter-kkt-tesseract"
+version = "0.1.0"
+description = "Differentiable Carter/KKT recurrence on Vulkan"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy>=2.3,<3",
+]
+
+[project.optional-dependencies]
+training = [
+    "torch>=2.6",
+]
+shader = [
+    "matplotlib==3.10.0",
+    "numpy==2.5.1",
+    "slangpy==0.43.1",
+]
+
+[tool.setuptools]
+py-modules = [
+    "export_hybrid",
+    "hybrid_tesseract",
+    "migrate_full_slang",
+    "progressive_full_unroll",
+    "train_hybrid",
+    "train_lyapunov_conditioned",
+    "visualize_tesseract",
+]

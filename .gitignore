@@ -1,0 +1,13 @@
+.tools/
+.venv/
+.venv-slang/
+.pytest_cache/
+.mypy_cache/
+*.spv
+*.pt
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+build/
+dist/

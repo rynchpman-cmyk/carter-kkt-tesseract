@@ -1,0 +1,133 @@
+# Reproducibility
+
+## Supported environment
+
+The validated environment is:
+
+- Windows 10/11 PowerShell;
+- Python 3.11+;
+- Vulkan-capable GPU and current driver;
+- PyTorch `2.11.0+cpu` for reference training;
+- SlangPy `0.43.1`;
+- NumPy `2.5.1` in the Slang environment;
+- Matplotlib `3.10.0`.
+
+The PowerShell runners create or reuse local virtual environments and install
+pinned shader-side dependencies.
+
+## Environment setup
+
+Training/reference environment:
+
+```powershell
+python -m pip install -r requirements-training.txt
+```
+
+Slang/Vulkan environment:
+
+```powershell
+python -m venv .venv-slang
+.\.venv-slang\Scripts\python.exe -m pip install -r requirements-slang.txt
+```
+
+The original GLSL runner creates `.venv` and downloads
+`glslangValidator` into `.tools` on first use.
+
+## Deterministic shader generation
+
+Generate the baseline:
+
+```powershell
+.\.venv-slang\Scripts\python.exe .\migrate_full_slang.py `
+    --model .\hybrid_model.json `
+    --output .\carter_tesseract_full.slang
+```
+
+Generate the conditioned module:
+
+```powershell
+.\.venv-slang\Scripts\python.exe .\migrate_full_slang.py `
+    --model .\hybrid_model_conditioned.json `
+    --output .\carter_tesseract_conditioned.slang
+```
+
+The generated files are tracked. CI regenerates both and fails if the source
+tree changes.
+
+## Validation tiers
+
+### 1. Artifact/source checks
+
+```powershell
+python -m unittest discover -s tests -v
+python -m py_compile *.py
+```
+
+These checks do not require a GPU.
+
+### 2. PyTorch differentiability
+
+```powershell
+python .\test_hybrid.py
+```
+
+Checks finite recurrence loss, exact KKT feasibility, and a local derivative
+against centered finite differences.
+
+### 3. GLSL/PyTorch parity
+
+```powershell
+python .\compare_backends.py --steps 2
+```
+
+Checks recurrence values, active sets, and classifier masks.
+
+### 4. Native Slang reverse
+
+```powershell
+.\run_full_slang.ps1
+```
+
+Checks compact/full primal equality, nonzero adjoints, all 1,287 weights, and
+finite-difference agreement.
+
+### 5. Progressive full physics
+
+```powershell
+.\run_progressive_full.ps1
+```
+
+Runs continuation horizons and whole-trajectory BPTT audits.
+
+### 6. Conditioned literal milestone
+
+```powershell
+.\run_conditioned_literal.ps1
+```
+
+Requires:
+
+- scale `1.0`;
+- no gain control;
+- valid KKT certificates;
+- healthy margins;
+- non-increasing Lyapunov value;
+- convergence at horizons 64 and 128.
+
+## Retraining
+
+```powershell
+.\run_train_conditioned.ps1
+```
+
+The checkpoint is written locally as `hybrid_tesseract_conditioned.pt` and is
+ignored by Git. The portable `hybrid_model_conditioned.json` is tracked.
+
+Because GPU kernels use float32 and training uses float64 PyTorch, final digits
+can differ while remaining inside the reported error bounds.
+
+## Known platform warning
+
+SlangPy can print a D3D12 Agility SDK warning when the Python executable and
+SDK live on different drives. The project explicitly creates a Vulkan device;
+the warning does not affect the validated Vulkan path.

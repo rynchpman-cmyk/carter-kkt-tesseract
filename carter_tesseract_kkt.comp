@@ -1,0 +1,1765 @@
+#version 460
+
+/*
+    THE CARTER-COUPLED KKT-BOUNDED BIFURCATION-REFLECTIVE
+    FREE-ENERGY MAP — TESSERACT IMPLEMENTATION
+
+    One invocation advances one scalar z_n to z_(n+1).
+
+    Tesseract vertex addresses (b3 b2 b1 b0):
+
+      0000  J_+(z)                    1000  J_n^(L)(z)
+      0001  J_-(z)                    1001  R_n(z)
+      0010  G_AB(z)                   1010  X_+
+      0011  Gamma_n(z)                1011  X_-
+      0100  q_n^(L)(.;z)              1100  X_(+-)
+      0101  theta_n^*(z)              1101  KKT state/certificate
+      0110  Lambda_n                  1110  Carter closure
+      0111  E_n                       1111  M_n
+
+    The originally unspecified primitive/constitutive definitions are made
+    explicit below as analytic tesseract-coordinate fields. Every quantity is
+    propagated as a first-order dual number, so the shader evaluates the
+    branchwise Carter pullback derivative without finite differences.
+
+    Required bindings:
+      binding 0: CarterParams UBO
+      binding 1: input z values
+      binding 2: output z values
+      binding 3: rank-four W tensor, flattened to 256 floats
+      binding 4: optional per-invocation diagnostics
+      binding 5: learned Carter master-function weights (1287 floats)
+
+    Set useFullW = 0 for the identity rank-four weight
+      W^(BD)_(AC) = delta_A^C delta_D^B.
+*/
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+const int DIM = 4;
+const int KKT_N = 4;
+const int KKT_STATES = 81; // 3^4 active-set assignments
+const float SAFE_EPS = 1.0e-12;
+const int MASTER_WIDTH = 32;
+const int MASTER_WEIGHT_COUNT = 1287;
+const int MW_SKIP_W = 0;
+const int MW_SKIP_B = 5;
+const int MW_L1_W = 6;
+const int MW_L1_B = 166;
+const int MW_L2_W = 198;
+const int MW_L2_B = 1222;
+const int MW_L3_W = 1254;
+const int MW_L3_B = 1286;
+
+// Tesseract vertex addresses.
+const int H_J_PLUS     = 0x0;
+const int H_J_MINUS    = 0x1;
+const int H_G          = 0x2;
+const int H_GAMMA      = 0x3;
+const int H_Q_LIMITED  = 0x4;
+const int H_THETA_STAR = 0x5;
+const int H_LAMBDA     = 0x6;
+const int H_ENERGY     = 0x7;
+const int H_J_LIMITED  = 0x8;
+const int H_RESIDUAL   = 0x9;
+const int H_X_PLUS     = 0xA;
+const int H_X_MINUS    = 0xB;
+const int H_X_CROSS    = 0xC;
+const int H_KKT        = 0xD;
+const int H_CLOSURE    = 0xE;
+const int H_M          = 0xF;
+
+layout(std140, binding = 0) uniform CarterParams
+{
+    // Outer recurrence coefficients.
+    float c;
+    float kappa;
+    float alpha;
+    float chi;
+
+    float zeta;
+    float omegaDelta;
+    float epsilonN;
+    float crossingTolerance;
+
+    // Free-energy weights.
+    float omegaE;
+    float omegaT;
+    float omegaPi;
+    float omegaA;
+
+    // Lambda coefficients.
+    float lambda0;
+    float lambdaP;
+    float lambdaM;
+    float lambdaC;
+
+    float lambdaPP;
+    float lambdaMM;
+    float lambdaCC;
+    float lambdaPM;
+
+    float lambdaGamma;
+    float lambdaQ;
+    float lambdaGammaQ;
+    float branchSplit;
+
+    // The target mixed stress tensor T_target^A_B.
+    mat4 targetT;
+
+    uint elementCount;
+    uint useFullW;
+    int forceSigma; // -1 or +1 forces a side; 0 derives it from z.
+    uint useNeuralLambda;
+} params;
+
+layout(std430, binding = 1) readonly buffer InputState
+{
+    float zCurrent[];
+};
+
+layout(std430, binding = 2) writeonly buffer OutputState
+{
+    float zNext[];
+};
+
+layout(std430, binding = 3) readonly buffer StressWeightTensor
+{
+    float W[256];
+};
+
+layout(std430, binding = 5) readonly buffer CarterMasterWeights
+{
+    float masterWeights[];
+};
+
+struct DebugRecord
+{
+    // (z_n, u_n, P_n, N_n)
+    vec4 mapTerms;
+
+    // (dJLimited/dz, R_n, D^(C)_(z,sigma) M_n, [M_n]_S)
+    vec4 correctionTerms;
+
+    // (M_minus, M_plus, iota_n, sigma_n)
+    vec4 branchTerms;
+
+    // (X_+, X_-, X_(+-), Lambda)
+    vec4 carterTerms;
+
+    // (KKT active mask, classifier mask, crossing flag, KKT-valid flag)
+    uvec4 masks;
+};
+
+layout(std430, binding = 4) writeonly buffer DebugState
+{
+    DebugRecord debugRecords[];
+};
+
+// -----------------------------------------------------------------------------
+// First-order dual arithmetic: a = (a.v, da/dz).
+// -----------------------------------------------------------------------------
+
+struct D1
+{
+    float v;
+    float dz;
+};
+
+struct DVec4
+{
+    vec4 v;
+    vec4 dz;
+};
+
+struct DMat4
+{
+    mat4 v;
+    mat4 dz;
+};
+
+D1 D(float value, float derivative)
+{
+    D1 r;
+    r.v = value;
+    r.dz = derivative;
+    return r;
+}
+
+D1 dadd(D1 a, D1 b)
+{
+    return D(a.v + b.v, a.dz + b.dz);
+}
+
+D1 dsub(D1 a, D1 b)
+{
+    return D(a.v - b.v, a.dz - b.dz);
+}
+
+D1 dneg(D1 a)
+{
+    return D(-a.v, -a.dz);
+}
+
+D1 dscale(float s, D1 a)
+{
+    return D(s * a.v, s * a.dz);
+}
+
+D1 dmul(D1 a, D1 b)
+{
+    return D(
+        a.v * b.v,
+        a.dz * b.v + a.v * b.dz
+    );
+}
+
+D1 ddiv(D1 a, D1 b)
+{
+    float denominator = b.v * b.v;
+    float guarded = max(abs(denominator), SAFE_EPS);
+    float signedGuarded = denominator < 0.0 ? -guarded : guarded;
+
+    return D(
+        a.v / b.v,
+        (a.dz * b.v - a.v * b.dz) / signedGuarded
+    );
+}
+
+D1 dsquare(D1 a)
+{
+    return D(a.v * a.v, 2.0 * a.v * a.dz);
+}
+
+D1 dsin(D1 a)
+{
+    return D(sin(a.v), cos(a.v) * a.dz);
+}
+
+D1 dcos(D1 a)
+{
+    return D(cos(a.v), -sin(a.v) * a.dz);
+}
+
+D1 dtanh(D1 a)
+{
+    float t = tanh(a.v);
+    return D(t, (1.0 - t * t) * a.dz);
+}
+
+D1 dsqrtSafe(D1 a)
+{
+    float value = sqrt(max(a.v, SAFE_EPS));
+    return D(value, a.dz / max(2.0 * value, SAFE_EPS));
+}
+
+D1 dsmoothAbs(D1 a)
+{
+    return dsqrtSafe(dadd(dsquare(a), D(1.0e-8, 0.0)));
+}
+
+DVec4 dvzero()
+{
+    DVec4 r;
+    r.v = vec4(0.0);
+    r.dz = vec4(0.0);
+    return r;
+}
+
+DMat4 dmzero()
+{
+    DMat4 r;
+    r.v = mat4(0.0);
+    r.dz = mat4(0.0);
+    return r;
+}
+
+DVec4 dvadd(DVec4 a, DVec4 b)
+{
+    DVec4 r;
+    r.v = a.v + b.v;
+    r.dz = a.dz + b.dz;
+    return r;
+}
+
+DVec4 dvsub(DVec4 a, DVec4 b)
+{
+    DVec4 r;
+    r.v = a.v - b.v;
+    r.dz = a.dz - b.dz;
+    return r;
+}
+
+DVec4 dvscale(D1 a, DVec4 x)
+{
+    DVec4 r;
+    r.v = a.v * x.v;
+    r.dz = a.dz * x.v + a.v * x.dz;
+    return r;
+}
+
+DVec4 dmvec(DMat4 A, DVec4 x)
+{
+    DVec4 r;
+    r.v = A.v * x.v;
+    r.dz = A.dz * x.v + A.v * x.dz;
+    return r;
+}
+
+D1 dvdot(DVec4 a, DVec4 b)
+{
+    return D(
+        dot(a.v, b.v),
+        dot(a.dz, b.v) + dot(a.v, b.dz)
+    );
+}
+
+D1 dvcomponent(DVec4 a, int component)
+{
+    return D(a.v[component], a.dz[component]);
+}
+
+void dmset(inout DMat4 A, int row, int column, D1 x)
+{
+    // GLSL matrices are indexed [column][row].
+    A.v[column][row] = x.v;
+    A.dz[column][row] = x.dz;
+}
+
+// -----------------------------------------------------------------------------
+// Tesseract addressing.
+// -----------------------------------------------------------------------------
+
+vec4 tesseractCoord(int vertex)
+{
+    return vec4(
+        (vertex & 0x8) != 0 ? 1.0 : -1.0,
+        (vertex & 0x4) != 0 ? 1.0 : -1.0,
+        (vertex & 0x2) != 0 ? 1.0 : -1.0,
+        (vertex & 0x1) != 0 ? 1.0 : -1.0
+    );
+}
+
+float vertexPhase(int vertex)
+{
+    vec4 h = tesseractCoord(vertex);
+    return dot(h, vec4(0.31, 0.47, 0.73, 1.13));
+}
+
+// -----------------------------------------------------------------------------
+// Explicit analytic fields at the primitive tesseract vertices.
+// -----------------------------------------------------------------------------
+
+DVec4 currentField(D1 z, int vertex, int sigma, float orientation)
+{
+    vec4 h = tesseractCoord(vertex);
+    float phase0 = vertexPhase(vertex);
+    float side = float(sigma);
+
+    DVec4 result = dvzero();
+
+    for (int A = 0; A < DIM; ++A)
+    {
+        float a = float(A + 1);
+        float phase = phase0 + orientation * 0.29 * a;
+        float base = 0.52 * h[A] + orientation * 0.11 * a;
+        float slope = orientation * (0.055 + 0.018 * a);
+        float amplitude = 0.13 + 0.015 * a;
+        float frequency = 0.47 + 0.19 * a;
+
+        D1 value = D(base, 0.0);
+        value = dadd(value, dscale(slope, z));
+        value = dadd(
+            value,
+            dscale(
+                amplitude,
+                dsin(dadd(dscale(frequency, z), D(phase, 0.0)))
+            )
+        );
+
+        // Explicit one-sided Carter splitting.
+        value = dadd(
+            value,
+            dscale(
+                params.branchSplit * side * h[A],
+                dtanh(dadd(dscale(1.65, z), D(phase, 0.0)))
+            )
+        );
+
+        result.v[A] = value.v;
+        result.dz[A] = value.dz;
+    }
+
+    return result;
+}
+
+DMat4 metricField(D1 z, int sigma)
+{
+    float phase = vertexPhase(H_G);
+    float side = float(sigma);
+    DMat4 G = dmzero();
+
+    D1 g00 = dneg(dadd(
+        D(1.28 + 0.015 * side, 0.0),
+        dscale(0.075, dtanh(dadd(dscale(0.72, z), D(phase, 0.0))))
+    ));
+
+    D1 g11 = dadd(
+        D(1.04, 0.0),
+        dscale(0.045, dsin(dadd(dscale(0.61, z), D(phase * 0.7, 0.0))))
+    );
+
+    D1 g22 = dadd(
+        D(1.09, 0.0),
+        dscale(0.038, dcos(dadd(dscale(0.53, z), D(phase * 0.9, 0.0))))
+    );
+
+    D1 g33 = dadd(
+        D(1.13, 0.0),
+        dscale(0.042, dtanh(dadd(dscale(0.83, z), D(phase * 1.1, 0.0))))
+    );
+
+    dmset(G, 0, 0, g00);
+    dmset(G, 1, 1, g11);
+    dmset(G, 2, 2, g22);
+    dmset(G, 3, 3, g33);
+
+    D1 g01 = dscale(
+        0.014,
+        dsin(dadd(dscale(0.39, z), D(phase + 0.2 * side, 0.0)))
+    );
+
+    D1 g12 = dscale(
+        0.011,
+        dcos(dadd(dscale(0.44, z), D(phase * 0.8, 0.0)))
+    );
+
+    D1 g23 = dscale(
+        0.009,
+        dsin(dadd(dscale(0.57, z), D(phase * 1.2 - 0.15 * side, 0.0)))
+    );
+
+    dmset(G, 0, 1, g01);
+    dmset(G, 1, 0, g01);
+    dmset(G, 1, 2, g12);
+    dmset(G, 2, 1, g12);
+    dmset(G, 2, 3, g23);
+    dmset(G, 3, 2, g23);
+
+    return G;
+}
+
+D1 gammaField(D1 z, int sigma)
+{
+    vec4 h = tesseractCoord(H_GAMMA);
+    float phase = vertexPhase(H_GAMMA);
+    float side = float(sigma);
+
+    D1 gamma = D(1.0 + 0.035 * side * h.w, 0.0);
+    gamma = dadd(
+        gamma,
+        dscale(0.19, dtanh(dadd(dscale(0.78, z), D(phase, 0.0))))
+    );
+    gamma = dadd(
+        gamma,
+        dscale(0.035 * h.y, dsin(dadd(dscale(0.31, z), D(phase * 0.5, 0.0))))
+    );
+
+    return gamma;
+}
+
+D1 invariantPlus(DMat4 G, DVec4 JPlus)
+{
+    return dneg(dvdot(JPlus, dmvec(G, JPlus)));
+}
+
+D1 invariantMinus(DMat4 G, DVec4 JMinus)
+{
+    return dneg(dvdot(JMinus, dmvec(G, JMinus)));
+}
+
+D1 invariantCross(DMat4 G, DVec4 JPlus, DVec4 JMinus)
+{
+    return dneg(dvdot(JPlus, dmvec(G, JMinus)));
+}
+
+// -----------------------------------------------------------------------------
+// Bounded KKT sector.
+// -----------------------------------------------------------------------------
+
+struct DualBoxQP
+{
+    float H[KKT_N * KKT_N];
+    float dH[KKT_N * KKT_N];
+
+    float f[KKT_N];
+    float df[KKT_N];
+
+    float lo[KKT_N];
+    float dlo[KKT_N];
+
+    float hi[KKT_N];
+    float dhi[KKT_N];
+};
+
+struct KKTResult
+{
+    float x[KKT_N];
+    float dx[KKT_N];
+    int activeSet[KKT_N];
+
+    int activeMask;
+    float objective;
+    float feasibilityMargin;
+    float conditionEstimate;
+    int valid;
+};
+
+int midx(int row, int column)
+{
+    return row * KKT_N + column;
+}
+
+bool solveLinear(
+    in float Ain[KKT_N * KKT_N],
+    in float bin[KKT_N],
+    out float x[KKT_N]
+)
+{
+    float A[KKT_N * KKT_N];
+    float b[KKT_N];
+
+    for (int i = 0; i < KKT_N * KKT_N; ++i)
+        A[i] = Ain[i];
+
+    for (int i = 0; i < KKT_N; ++i)
+        b[i] = bin[i];
+
+    for (int column = 0; column < KKT_N; ++column)
+    {
+        int pivot = column;
+        float bestPivot = abs(A[midx(column, column)]);
+
+        for (int row = column + 1; row < KKT_N; ++row)
+        {
+            float candidate = abs(A[midx(row, column)]);
+            if (candidate > bestPivot)
+            {
+                bestPivot = candidate;
+                pivot = row;
+            }
+        }
+
+        if (bestPivot < 1.0e-10)
+            return false;
+
+        if (pivot != column)
+        {
+            for (int j = 0; j < KKT_N; ++j)
+            {
+                float temporary = A[midx(column, j)];
+                A[midx(column, j)] = A[midx(pivot, j)];
+                A[midx(pivot, j)] = temporary;
+            }
+
+            float temporaryB = b[column];
+            b[column] = b[pivot];
+            b[pivot] = temporaryB;
+        }
+
+        float inversePivot = 1.0 / A[midx(column, column)];
+
+        for (int j = column; j < KKT_N; ++j)
+            A[midx(column, j)] *= inversePivot;
+
+        b[column] *= inversePivot;
+
+        for (int row = 0; row < KKT_N; ++row)
+        {
+            if (row == column)
+                continue;
+
+            float factor = A[midx(row, column)];
+
+            for (int j = column; j < KKT_N; ++j)
+                A[midx(row, j)] -= factor * A[midx(column, j)];
+
+            b[row] -= factor * b[column];
+        }
+    }
+
+    for (int i = 0; i < KKT_N; ++i)
+        x[i] = b[i];
+
+    return true;
+}
+
+float matrixConditionEstimate(in float A[KKT_N * KKT_N])
+{
+    float normA = 0.0;
+    for (int row = 0; row < KKT_N; ++row)
+    {
+        float rowSum = 0.0;
+        for (int column = 0; column < KKT_N; ++column)
+            rowSum += abs(A[midx(row, column)]);
+        normA = max(normA, rowSum);
+    }
+
+    float inverse[KKT_N * KKT_N];
+    for (int i = 0; i < KKT_N * KKT_N; ++i)
+        inverse[i] = 0.0;
+
+    for (int column = 0; column < KKT_N; ++column)
+    {
+        float rhs[KKT_N];
+        float solution[KKT_N];
+        for (int row = 0; row < KKT_N; ++row)
+            rhs[row] = row == column ? 1.0 : 0.0;
+        if (!solveLinear(A, rhs, solution))
+            return 3.402823e38;
+        for (int row = 0; row < KKT_N; ++row)
+            inverse[midx(row, column)] = solution[row];
+    }
+
+    float normInverse = 0.0;
+    for (int row = 0; row < KKT_N; ++row)
+    {
+        float rowSum = 0.0;
+        for (int column = 0; column < KKT_N; ++column)
+            rowSum += abs(inverse[midx(row, column)]);
+        normInverse = max(normInverse, rowSum);
+    }
+    return normA * normInverse;
+}
+
+int integerPower3(int exponent)
+{
+    int result = 1;
+    for (int i = 0; i < exponent; ++i)
+        result *= 3;
+    return result;
+}
+
+int activeState(int mask, int variable)
+{
+    return ((mask / integerPower3(variable)) % 3) - 1;
+}
+
+int activePreference(int state, int sigma)
+{
+    // Infinitesimal one-sided tie convention at exact KKT boundaries.
+    if (sigma > 0)
+    {
+        if (state > 0) return 0;
+        if (state == 0) return 1;
+        return 2;
+    }
+
+    if (state < 0) return 0;
+    if (state == 0) return 1;
+    return 2;
+}
+
+int activeTieScore(int mask, int sigma)
+{
+    int score = 0;
+    int place = 1;
+
+    for (int i = 0; i < KKT_N; ++i)
+    {
+        score += activePreference(activeState(mask, i), sigma) * place;
+        place *= 3;
+    }
+
+    return score;
+}
+
+DualBoxQP buildKKTProblem(
+    D1 z,
+    D1 Gamma,
+    D1 XPlus,
+    D1 XMinus,
+    D1 XCross,
+    int sigma
+)
+{
+    DualBoxQP qp;
+    D1 Hd[KKT_N * KKT_N];
+    D1 target[KKT_N];
+    D1 lo[KKT_N];
+    D1 hi[KKT_N];
+
+    float phase = vertexPhase(H_KKT);
+    float side = float(sigma);
+
+    target[0] = dadd(
+        dscale(
+            0.56,
+            dtanh(dadd(
+                dadd(dscale(0.43, XCross), dscale(0.24, Gamma)),
+                dadd(dscale(0.12, z), D(phase * 0.08, 0.0))
+            ))
+        ),
+        D(0.075 * side, 0.0)
+    );
+
+    target[1] = dscale(
+        0.43,
+        dtanh(dadd(
+            dsub(dscale(0.36, XPlus), dscale(0.11, XMinus)),
+            D(phase * 0.04, 0.0)
+        ))
+    );
+
+    target[2] = dscale(
+        0.43,
+        dtanh(dadd(
+            dsub(dscale(0.36, XMinus), dscale(0.11, XPlus)),
+            D(-phase * 0.03, 0.0)
+        ))
+    );
+
+    target[3] = dadd(
+        dscale(
+            0.31,
+            dtanh(dadd(
+                dadd(dscale(0.29, dsub(XPlus, XMinus)), dscale(0.18, z)),
+                D(phase * 0.06, 0.0)
+            ))
+        ),
+        D(0.045 * side, 0.0)
+    );
+
+    lo[0] = dadd(D(-0.32, 0.0), dscale(0.025, dtanh(dscale(0.48, z))));
+    hi[0] = dadd(D( 0.32, 0.0), dscale(0.025, dtanh(dscale(0.48, z))));
+
+    lo[1] = dadd(D(-0.46, 0.0), dscale(0.018, dsin(dadd(dscale(0.37, z), D(phase, 0.0)))));
+    hi[1] = dadd(D( 0.46, 0.0), dscale(0.018, dsin(dadd(dscale(0.37, z), D(phase, 0.0)))));
+
+    lo[2] = dadd(D(-0.46, 0.0), dscale(0.017, dcos(dadd(dscale(0.41, z), D(phase * 0.7, 0.0)))));
+    hi[2] = dadd(D( 0.46, 0.0), dscale(0.017, dcos(dadd(dscale(0.41, z), D(phase * 0.7, 0.0)))));
+
+    lo[3] = dadd(D(-0.40, 0.0), dscale(0.020, dtanh(dadd(dscale(0.52, z), D(phase * 0.5, 0.0)))));
+    hi[3] = dadd(D( 0.40, 0.0), dscale(0.020, dtanh(dadd(dscale(0.52, z), D(phase * 0.5, 0.0)))));
+
+    for (int i = 0; i < KKT_N; ++i)
+    {
+        for (int j = 0; j < KKT_N; ++j)
+        {
+            D1 hij;
+
+            if (i == j)
+            {
+                float fi = float(i + 1);
+                hij = D(1.42 + 0.24 * fi, 0.0);
+                hij = dadd(hij, dscale(0.070, dsquare(Gamma)));
+                hij = dadd(hij, dscale(0.022 * fi, dsmoothAbs(XCross)));
+            }
+            else
+            {
+                float separation = float(abs(i - j) + 1);
+                float frequency = 0.28 + 0.055 * float(i + j + 1);
+                hij = dscale(
+                    0.055 / separation,
+                    dtanh(dadd(dscale(frequency, z), D(phase * 0.13 * float(i + j + 1), 0.0)))
+                );
+            }
+
+            Hd[midx(i, j)] = hij;
+            qp.H[midx(i, j)] = hij.v;
+            qp.dH[midx(i, j)] = hij.dz;
+        }
+    }
+
+    // f = -H target, so the unconstrained minimizer is target.
+    for (int i = 0; i < KKT_N; ++i)
+    {
+        D1 fi = D(0.0, 0.0);
+
+        for (int j = 0; j < KKT_N; ++j)
+            fi = dsub(fi, dmul(Hd[midx(i, j)], target[j]));
+
+        qp.f[i] = fi.v;
+        qp.df[i] = fi.dz;
+        qp.lo[i] = lo[i].v;
+        qp.dlo[i] = lo[i].dz;
+        qp.hi[i] = hi[i].v;
+        qp.dhi[i] = hi[i].dz;
+    }
+
+    return qp;
+}
+
+KKTResult solveBoundedKKT(DualBoxQP qp, int sigma)
+{
+    const float FEASIBILITY_TOL = 2.0e-5;
+    const float OBJECTIVE_TOL = 1.0e-7;
+
+    KKTResult best;
+    best.valid = 0;
+    best.objective = 3.402823e38;
+    best.feasibilityMargin = -3.402823e38;
+    best.conditionEstimate = 3.402823e38;
+    best.activeMask = -1;
+    int bestTieScore = 2147483647;
+
+    for (int i = 0; i < KKT_N; ++i)
+    {
+        best.x[i] = 0.0;
+        best.dx[i] = 0.0;
+        best.activeSet[i] = 0;
+    }
+
+    for (int mask = 0; mask < KKT_STATES; ++mask)
+    {
+        float A[KKT_N * KKT_N];
+        float b[KKT_N];
+        int states[KKT_N];
+
+        for (int i = 0; i < KKT_N * KKT_N; ++i)
+            A[i] = 0.0;
+
+        for (int i = 0; i < KKT_N; ++i)
+        {
+            states[i] = activeState(mask, i);
+
+            if (states[i] == 0)
+            {
+                for (int j = 0; j < KKT_N; ++j)
+                    A[midx(i, j)] = qp.H[midx(i, j)];
+
+                b[i] = -qp.f[i];
+            }
+            else
+            {
+                A[midx(i, i)] = 1.0;
+
+                bool lower = states[i] < 0;
+                b[i] = lower ? qp.lo[i] : qp.hi[i];
+            }
+        }
+
+        float x[KKT_N];
+        if (!solveLinear(A, b, x))
+            continue;
+
+        bool valid = true;
+        float gradient[KKT_N];
+
+        for (int i = 0; i < KKT_N; ++i)
+        {
+            gradient[i] = qp.f[i];
+
+            for (int j = 0; j < KKT_N; ++j)
+                gradient[i] += qp.H[midx(i, j)] * x[j];
+
+            if (x[i] < qp.lo[i] - FEASIBILITY_TOL ||
+                x[i] > qp.hi[i] + FEASIBILITY_TOL)
+            {
+                valid = false;
+            }
+
+            if (states[i] == 0 && abs(gradient[i]) > FEASIBILITY_TOL)
+                valid = false;
+
+            // At a lower bound, grad >= 0. At an upper bound, grad <= 0.
+            if (states[i] < 0 && gradient[i] < -FEASIBILITY_TOL)
+                valid = false;
+
+            if (states[i] > 0 && gradient[i] > FEASIBILITY_TOL)
+                valid = false;
+        }
+
+        if (!valid)
+            continue;
+
+        float objective = 0.0;
+
+        for (int i = 0; i < KKT_N; ++i)
+        {
+            objective += qp.f[i] * x[i];
+
+            for (int j = 0; j < KKT_N; ++j)
+                objective += 0.5 * x[i] * qp.H[midx(i, j)] * x[j];
+        }
+
+        int tieScore = activeTieScore(mask, sigma);
+        bool improves = objective < best.objective - OBJECTIVE_TOL;
+        bool tiedAndPreferred =
+            abs(objective - best.objective) <= OBJECTIVE_TOL &&
+            tieScore < bestTieScore;
+
+        if (!improves && !tiedAndPreferred)
+            continue;
+
+        best.valid = 1;
+        best.objective = objective;
+        best.activeMask = mask;
+        bestTieScore = tieScore;
+
+        for (int i = 0; i < KKT_N; ++i)
+        {
+            best.x[i] = x[i];
+            best.activeSet[i] = states[i];
+        }
+    }
+
+    if (best.valid != 0)
+    {
+        // Rebuild only the winning system.  This is the selected KKT residual
+        // used by both the tangent and its transpose-VJP counterpart:
+        // A dx = db - dA x and A^T lambda = dL/dx.
+        float A[KKT_N * KKT_N];
+        float dA[KKT_N * KKT_N];
+        float db[KKT_N];
+        for (int i = 0; i < KKT_N * KKT_N; ++i)
+        {
+            A[i] = 0.0;
+            dA[i] = 0.0;
+        }
+        for (int i = 0; i < KKT_N; ++i)
+        {
+            if (best.activeSet[i] == 0)
+            {
+                for (int j = 0; j < KKT_N; ++j)
+                {
+                    A[midx(i, j)] = qp.H[midx(i, j)];
+                    dA[midx(i, j)] = qp.dH[midx(i, j)];
+                }
+                db[i] = -qp.df[i];
+            }
+            else
+            {
+                A[midx(i, i)] = 1.0;
+                bool lower = best.activeSet[i] < 0;
+                db[i] = lower ? qp.dlo[i] : qp.dhi[i];
+            }
+        }
+
+        float derivativeRhs[KKT_N];
+        for (int i = 0; i < KKT_N; ++i)
+        {
+            derivativeRhs[i] = db[i];
+            for (int j = 0; j < KKT_N; ++j)
+                derivativeRhs[i] -= dA[midx(i, j)] * best.x[j];
+        }
+        float dx[KKT_N];
+        if (!solveLinear(A, derivativeRhs, dx))
+        {
+            best.valid = 0;
+        }
+        else
+        {
+            best.feasibilityMargin = 3.402823e38;
+            best.conditionEstimate = matrixConditionEstimate(A);
+            for (int i = 0; i < KKT_N; ++i)
+            {
+                best.dx[i] = dx[i];
+                float gradient = qp.f[i];
+                for (int j = 0; j < KKT_N; ++j)
+                    gradient += qp.H[midx(i, j)] * best.x[j];
+
+                float margin;
+                if (best.activeSet[i] < 0)
+                    margin = gradient;
+                else if (best.activeSet[i] > 0)
+                    margin = -gradient;
+                else
+                    margin = min(
+                        best.x[i] - qp.lo[i],
+                        qp.hi[i] - best.x[i]
+                    );
+                best.feasibilityMargin =
+                    min(best.feasibilityMargin, margin);
+            }
+        }
+    }
+
+    return best;
+}
+
+D1 kktVariable(KKTResult result, int variable)
+{
+    return D(result.x[variable], result.dx[variable]);
+}
+
+DVec4 kktTheta(KKTResult result)
+{
+    DVec4 theta = dvzero();
+
+    theta.v.x = result.x[1];
+    theta.v.y = result.x[2];
+    theta.v.z = result.x[3];
+
+    theta.dz.x = result.dx[1];
+    theta.dz.y = result.dx[2];
+    theta.dz.z = result.dx[3];
+
+    return theta;
+}
+
+// -----------------------------------------------------------------------------
+// Constitutive Lambda and Carter closure.
+// -----------------------------------------------------------------------------
+
+struct LambdaResult
+{
+    D1 value;
+    D1 dXPlus;
+    D1 dXMinus;
+    D1 dXCross;
+};
+
+LambdaResult analyticLambdaField(
+    D1 XPlus,
+    D1 XMinus,
+    D1 XCross,
+    D1 Gamma,
+    D1 qLimited
+)
+{
+    float phase = vertexPhase(H_LAMBDA);
+
+    D1 coefficientP = dadd(
+        D(params.lambdaP, 0.0),
+        dadd(dscale(0.050, qLimited), dscale(0.020, Gamma))
+    );
+
+    D1 coefficientM = dadd(
+        D(params.lambdaM, 0.0),
+        dadd(dscale(-0.040, qLimited), dscale(0.017, Gamma))
+    );
+
+    D1 coefficientC = dadd(
+        D(params.lambdaC, 0.0),
+        dadd(dscale(0.030, Gamma), D(0.004 * phase, 0.0))
+    );
+
+    D1 value = D(params.lambda0, 0.0);
+    value = dadd(value, dmul(coefficientP, XPlus));
+    value = dadd(value, dmul(coefficientM, XMinus));
+    value = dadd(value, dmul(coefficientC, XCross));
+
+    value = dadd(value, dscale(0.5 * params.lambdaPP, dsquare(XPlus)));
+    value = dadd(value, dscale(0.5 * params.lambdaMM, dsquare(XMinus)));
+    value = dadd(value, dscale(0.5 * params.lambdaCC, dsquare(XCross)));
+    value = dadd(value, dscale(params.lambdaPM, dmul(XPlus, XMinus)));
+
+    value = dadd(value, dscale(params.lambdaGamma, Gamma));
+    value = dadd(value, dscale(params.lambdaQ, qLimited));
+    value = dadd(value, dscale(params.lambdaGammaQ, dmul(Gamma, qLimited)));
+
+    LambdaResult result;
+    result.value = value;
+
+    result.dXPlus = dadd(
+        coefficientP,
+        dadd(
+            dscale(params.lambdaPP, XPlus),
+            dscale(params.lambdaPM, XMinus)
+        )
+    );
+
+    result.dXMinus = dadd(
+        coefficientM,
+        dadd(
+            dscale(params.lambdaMM, XMinus),
+            dscale(params.lambdaPM, XPlus)
+        )
+    );
+
+    result.dXCross = dadd(
+        coefficientC,
+        dscale(params.lambdaCC, XCross)
+    );
+
+    return result;
+}
+
+LambdaResult neuralLambdaField(
+    D1 XPlus,
+    D1 XMinus,
+    D1 XCross,
+    D1 Gamma,
+    D1 qLimited
+)
+{
+    // The learned scalar is a linear path plus a two-layer tanh residual MLP.
+    // D1 forward propagation carries d/dz. Reverse propagation in D1 arithmetic
+    // returns both each Carter partial and its directional d/dz derivative.
+    D1 inputValue[5];
+    D1 hidden1[MASTER_WIDTH];
+    D1 hidden2[MASTER_WIDTH];
+    D1 adjointHidden1[MASTER_WIDTH];
+    D1 adjointPre1[MASTER_WIDTH];
+    D1 adjointHidden2[MASTER_WIDTH];
+    D1 adjointPre2[MASTER_WIDTH];
+    D1 adjointInput[5];
+
+    inputValue[0] = XPlus;
+    inputValue[1] = XMinus;
+    inputValue[2] = XCross;
+    inputValue[3] = Gamma;
+    inputValue[4] = qLimited;
+
+    D1 outputValue = D(masterWeights[MW_SKIP_B], 0.0);
+    for (int inputIndex = 0; inputIndex < 5; ++inputIndex)
+    {
+        outputValue = dadd(
+            outputValue,
+            dscale(masterWeights[MW_SKIP_W + inputIndex], inputValue[inputIndex])
+        );
+    }
+
+    for (int neuron = 0; neuron < MASTER_WIDTH; ++neuron)
+    {
+        D1 preactivation = D(masterWeights[MW_L1_B + neuron], 0.0);
+        for (int inputIndex = 0; inputIndex < 5; ++inputIndex)
+        {
+            int weightIndex = MW_L1_W + neuron * 5 + inputIndex;
+            preactivation = dadd(
+                preactivation,
+                dscale(masterWeights[weightIndex], inputValue[inputIndex])
+            );
+        }
+        hidden1[neuron] = dtanh(preactivation);
+    }
+
+    for (int neuron = 0; neuron < MASTER_WIDTH; ++neuron)
+    {
+        D1 preactivation = D(masterWeights[MW_L2_B + neuron], 0.0);
+        for (int inputIndex = 0; inputIndex < MASTER_WIDTH; ++inputIndex)
+        {
+            int weightIndex =
+                MW_L2_W + neuron * MASTER_WIDTH + inputIndex;
+            preactivation = dadd(
+                preactivation,
+                dscale(masterWeights[weightIndex], hidden1[inputIndex])
+            );
+        }
+        hidden2[neuron] = dtanh(preactivation);
+    }
+
+    outputValue = dadd(outputValue, D(masterWeights[MW_L3_B], 0.0));
+    for (int neuron = 0; neuron < MASTER_WIDTH; ++neuron)
+    {
+        outputValue = dadd(
+            outputValue,
+            dscale(masterWeights[MW_L3_W + neuron], hidden2[neuron])
+        );
+    }
+
+    // Reverse mode over the MLP, evaluated with dual adjoints.
+    for (int neuron = 0; neuron < MASTER_WIDTH; ++neuron)
+    {
+        adjointHidden2[neuron] = D(masterWeights[MW_L3_W + neuron], 0.0);
+        adjointPre2[neuron] = dmul(
+            adjointHidden2[neuron],
+            dsub(D(1.0, 0.0), dsquare(hidden2[neuron]))
+        );
+    }
+
+    for (int inputIndex = 0; inputIndex < MASTER_WIDTH; ++inputIndex)
+    {
+        D1 adjoint = D(0.0, 0.0);
+        for (int neuron = 0; neuron < MASTER_WIDTH; ++neuron)
+        {
+            int weightIndex =
+                MW_L2_W + neuron * MASTER_WIDTH + inputIndex;
+            adjoint = dadd(
+                adjoint,
+                dscale(masterWeights[weightIndex], adjointPre2[neuron])
+            );
+        }
+        adjointHidden1[inputIndex] = adjoint;
+        adjointPre1[inputIndex] = dmul(
+            adjointHidden1[inputIndex],
+            dsub(D(1.0, 0.0), dsquare(hidden1[inputIndex]))
+        );
+    }
+
+    for (int inputIndex = 0; inputIndex < 5; ++inputIndex)
+    {
+        D1 adjoint = D(masterWeights[MW_SKIP_W + inputIndex], 0.0);
+        for (int neuron = 0; neuron < MASTER_WIDTH; ++neuron)
+        {
+            int weightIndex = MW_L1_W + neuron * 5 + inputIndex;
+            adjoint = dadd(
+                adjoint,
+                dscale(masterWeights[weightIndex], adjointPre1[neuron])
+            );
+        }
+        adjointInput[inputIndex] = adjoint;
+    }
+
+    LambdaResult result;
+    result.value = outputValue;
+    result.dXPlus = adjointInput[0];
+    result.dXMinus = adjointInput[1];
+    result.dXCross = adjointInput[2];
+    return result;
+}
+
+LambdaResult lambdaField(
+    D1 XPlus,
+    D1 XMinus,
+    D1 XCross,
+    D1 Gamma,
+    D1 qLimited
+)
+{
+    if (params.useNeuralLambda != 0u)
+        return neuralLambdaField(XPlus, XMinus, XCross, Gamma, qLimited);
+
+    return analyticLambdaField(XPlus, XMinus, XCross, Gamma, qLimited);
+}
+
+DMat4 stressTensor(
+    D1 Psi,
+    DVec4 JPlus,
+    DVec4 JMinus,
+    DVec4 piPlus,
+    DVec4 piMinus
+)
+{
+    DMat4 T = dmzero();
+
+    for (int A = 0; A < DIM; ++A)
+    {
+        for (int B = 0; B < DIM; ++B)
+        {
+            float delta = A == B ? 1.0 : 0.0;
+
+            D1 component = D(Psi.v * delta, Psi.dz * delta);
+            component = dadd(
+                component,
+                dmul(
+                    D(JPlus.v[A], JPlus.dz[A]),
+                    D(piPlus.v[B], piPlus.dz[B])
+                )
+            );
+            component = dadd(
+                component,
+                dmul(
+                    D(JMinus.v[A], JMinus.dz[A]),
+                    D(piMinus.v[B], piMinus.dz[B])
+                )
+            );
+
+            dmset(T, A, B, component);
+        }
+    }
+
+    return T;
+}
+
+int widx(int A, int B, int C, int Dindex)
+{
+    return (((A * DIM + B) * DIM + C) * DIM + Dindex);
+}
+
+float stressWeight(int A, int B, int C, int Dindex)
+{
+    if (params.useFullW != 0u)
+        return W[widx(A, B, C, Dindex)];
+
+    return (A == C && B == Dindex) ? 1.0 : 0.0;
+}
+
+D1 weightedStressNorm(DMat4 T)
+{
+    D1 result = D(0.0, 0.0);
+
+    for (int A = 0; A < DIM; ++A)
+    for (int B = 0; B < DIM; ++B)
+    for (int C = 0; C < DIM; ++C)
+    for (int Dindex = 0; Dindex < DIM; ++Dindex)
+    {
+        D1 TAB = D(
+            T.v[B][A] - params.targetT[B][A],
+            T.dz[B][A]
+        );
+
+        D1 TCD = D(
+            T.v[Dindex][C] - params.targetT[Dindex][C],
+            T.dz[Dindex][C]
+        );
+
+        result = dadd(
+            result,
+            dscale(
+                stressWeight(A, B, C, Dindex),
+                dmul(TAB, TCD)
+            )
+        );
+    }
+
+    return result;
+}
+
+D1 energyField(
+    D1 XPlus,
+    D1 XMinus,
+    D1 XCross,
+    D1 Gamma,
+    DVec4 theta
+)
+{
+    float phase = vertexPhase(H_ENERGY);
+
+    D1 energy = dscale(
+        0.5,
+        dadd(dsmoothAbs(XPlus), dsmoothAbs(XMinus))
+    );
+
+    energy = dadd(energy, dscale(0.25, dsquare(XCross)));
+    energy = dadd(energy, dscale(0.10, dsquare(dsub(Gamma, D(1.0, 0.0)))));
+
+    for (int i = 0; i < 3; ++i)
+        energy = dadd(energy, dscale(0.05, dsquare(dvcomponent(theta, i))));
+
+    energy = dadd(energy, D(0.0025 * phase, 0.0));
+    return energy;
+}
+
+D1 limitedJField(D1 z, D1 qLimited, DVec4 theta)
+{
+    float phase = vertexPhase(H_J_LIMITED);
+    D1 theta0 = dvcomponent(theta, 0);
+    D1 theta1 = dvcomponent(theta, 1);
+    D1 theta2 = dvcomponent(theta, 2);
+
+    D1 result = qLimited;
+    result = dadd(result, dscale(0.50, dmul(theta0, theta1)));
+    result = dsub(result, dscale(0.25, theta2));
+    result = dadd(
+        result,
+        dscale(
+            0.10,
+            dsin(dadd(dadd(z, theta2), D(phase * 0.1, 0.0)))
+        )
+    );
+
+    return result;
+}
+
+D1 residualField(
+    D1 Gamma,
+    D1 qLimited,
+    DVec4 theta,
+    D1 XCross
+)
+{
+    float phase = vertexPhase(H_RESIDUAL);
+
+    D1 meanTheta = dscale(
+        1.0 / 3.0,
+        dadd(
+            dadd(dvcomponent(theta, 0), dvcomponent(theta, 1)),
+            dvcomponent(theta, 2)
+        )
+    );
+
+    D1 result = dadd(Gamma, dmul(qLimited, XCross));
+    result = dsub(result, meanTheta);
+    result = dadd(result, D(0.003 * phase, 0.0));
+    return result;
+}
+
+D1 freeEnergyField(
+    D1 energy,
+    DMat4 T,
+    DVec4 piPlus,
+    DVec4 piMinus,
+    DMat4 G,
+    D1 entrainmentA,
+    D1 XCross
+)
+{
+    D1 stressTerm = weightedStressNorm(T);
+    DVec4 deltaPi = dvsub(piPlus, piMinus);
+    D1 momentumTerm = dvdot(deltaPi, dmvec(G, deltaPi));
+    D1 entrainmentTerm = dmul(entrainmentA, XCross);
+
+    D1 result = dscale(params.omegaE, energy);
+    result = dadd(result, dscale(0.5 * params.omegaT, stressTerm));
+    result = dadd(result, dscale(0.5 * params.omegaPi, momentumTerm));
+    result = dadd(result, dscale(params.omegaA, entrainmentTerm));
+    return result;
+}
+
+// -----------------------------------------------------------------------------
+// Complete tesseract state.
+// -----------------------------------------------------------------------------
+
+struct TesseractState
+{
+    D1 scalar[16];
+    DVec4 vector[16];
+    DMat4 matrix4[16];
+
+    KKTResult kkt;
+    DVec4 piPlus;
+    DVec4 piMinus;
+    D1 BPlus;
+    D1 BMinus;
+    D1 entrainmentA;
+    D1 Psi;
+
+    uint classifierMask;
+    float classifierMargin[4];
+};
+
+TesseractState evaluateTesseract(D1 z, int sigma)
+{
+    TesseractState state;
+
+    for (int i = 0; i < 16; ++i)
+    {
+        state.scalar[i] = D(0.0, 0.0);
+        state.vector[i] = dvzero();
+        state.matrix4[i] = dmzero();
+    }
+
+    // Primitive Carter face.
+    state.vector[H_J_PLUS] = currentField(z, H_J_PLUS, sigma, +1.0);
+    state.vector[H_J_MINUS] = currentField(z, H_J_MINUS, sigma, -1.0);
+    state.matrix4[H_G] = metricField(z, sigma);
+    state.scalar[H_GAMMA] = gammaField(z, sigma);
+
+    // Invariant face.
+    state.scalar[H_X_PLUS] = invariantPlus(
+        state.matrix4[H_G],
+        state.vector[H_J_PLUS]
+    );
+
+    state.scalar[H_X_MINUS] = invariantMinus(
+        state.matrix4[H_G],
+        state.vector[H_J_MINUS]
+    );
+
+    state.scalar[H_X_CROSS] = invariantCross(
+        state.matrix4[H_G],
+        state.vector[H_J_PLUS],
+        state.vector[H_J_MINUS]
+    );
+
+    // Bounded KKT face and its exact active-branch pullback.
+    DualBoxQP qp = buildKKTProblem(
+        z,
+        state.scalar[H_GAMMA],
+        state.scalar[H_X_PLUS],
+        state.scalar[H_X_MINUS],
+        state.scalar[H_X_CROSS],
+        sigma
+    );
+
+    state.kkt = solveBoundedKKT(qp, sigma);
+    state.scalar[H_KKT] = D(state.kkt.objective, 0.0);
+    state.scalar[H_Q_LIMITED] = kktVariable(state.kkt, 0);
+    state.vector[H_THETA_STAR] = kktTheta(state.kkt);
+
+    // Constitutive vertex.
+    LambdaResult lambda = lambdaField(
+        state.scalar[H_X_PLUS],
+        state.scalar[H_X_MINUS],
+        state.scalar[H_X_CROSS],
+        state.scalar[H_GAMMA],
+        state.scalar[H_Q_LIMITED]
+    );
+
+    state.scalar[H_LAMBDA] = lambda.value;
+
+    state.BPlus = dscale(-2.0, lambda.dXPlus);
+    state.BMinus = dscale(-2.0, lambda.dXMinus);
+    state.entrainmentA = dscale(-1.0, lambda.dXCross);
+
+    DVec4 JPlusCov = dmvec(state.matrix4[H_G], state.vector[H_J_PLUS]);
+    DVec4 JMinusCov = dmvec(state.matrix4[H_G], state.vector[H_J_MINUS]);
+
+    state.piPlus = dvadd(
+        dvscale(state.BPlus, JPlusCov),
+        dvscale(state.entrainmentA, JMinusCov)
+    );
+
+    state.piMinus = dvadd(
+        dvscale(state.BMinus, JMinusCov),
+        dvscale(state.entrainmentA, JPlusCov)
+    );
+
+    state.Psi = lambda.value;
+    state.Psi = dsub(
+        state.Psi,
+        dvdot(state.vector[H_J_PLUS], state.piPlus)
+    );
+    state.Psi = dsub(
+        state.Psi,
+        dvdot(state.vector[H_J_MINUS], state.piMinus)
+    );
+
+    // Carter closure vertex stores Psi, piPlus, and T. piMinus remains a typed
+    // side-fiber because one vertex cannot hold two independent vec4 payloads.
+    state.scalar[H_CLOSURE] = state.Psi;
+    state.vector[H_CLOSURE] = state.piPlus;
+    state.matrix4[H_CLOSURE] = stressTensor(
+        state.Psi,
+        state.vector[H_J_PLUS],
+        state.vector[H_J_MINUS],
+        state.piPlus,
+        state.piMinus
+    );
+
+    // Explicit missing definitions at their coordinates.
+    state.scalar[H_ENERGY] = energyField(
+        state.scalar[H_X_PLUS],
+        state.scalar[H_X_MINUS],
+        state.scalar[H_X_CROSS],
+        state.scalar[H_GAMMA],
+        state.vector[H_THETA_STAR]
+    );
+
+    state.scalar[H_J_LIMITED] = limitedJField(
+        z,
+        state.scalar[H_Q_LIMITED],
+        state.vector[H_THETA_STAR]
+    );
+
+    state.scalar[H_RESIDUAL] = residualField(
+        state.scalar[H_GAMMA],
+        state.scalar[H_Q_LIMITED],
+        state.vector[H_THETA_STAR],
+        state.scalar[H_X_CROSS]
+    );
+
+    // Final free-energy vertex. Its .dz member is D^(C)_(z,sigma) M.
+    state.scalar[H_M] = freeEnergyField(
+        state.scalar[H_ENERGY],
+        state.matrix4[H_CLOSURE],
+        state.piPlus,
+        state.piMinus,
+        state.matrix4[H_G],
+        state.entrainmentA,
+        state.scalar[H_X_CROSS]
+    );
+
+    // Classifier certificate: four continuous switching margins.
+    state.classifierMargin[0] = z.v;
+    state.classifierMargin[1] = state.scalar[H_GAMMA].v - 1.0;
+    state.classifierMargin[2] = state.scalar[H_X_CROSS].v;
+    state.classifierMargin[3] =
+        state.scalar[H_Q_LIMITED].v - state.vector[H_THETA_STAR].v.x;
+
+    state.classifierMask = 0u;
+
+    for (int i = 0; i < 4; ++i)
+    {
+        if (state.classifierMargin[i] >= 0.0)
+            state.classifierMask |= (1u << uint(i));
+    }
+
+    return state;
+}
+
+// -----------------------------------------------------------------------------
+// Boundary certificates and iota_n.
+// -----------------------------------------------------------------------------
+
+bool marginCrossed(float a, float b)
+{
+    float tolerance = max(params.crossingTolerance, 0.0);
+
+    return
+        abs(a) <= tolerance ||
+        abs(b) <= tolerance ||
+        ((a < 0.0) != (b < 0.0));
+}
+
+bool certificateChanged(TesseractState a, TesseractState b)
+{
+    if (a.kkt.activeMask != b.kkt.activeMask)
+        return true;
+
+    if (a.classifierMask != b.classifierMask)
+        return true;
+
+    for (int i = 0; i < 4; ++i)
+    {
+        if (marginCrossed(a.classifierMargin[i], b.classifierMargin[i]))
+            return true;
+    }
+
+    return false;
+}
+
+bool parityBoundaryCrossed(float z0, float z1)
+{
+    float u0 = 1.5 * (z0 + params.c);
+    float u1 = 1.5 * (z1 + params.c);
+
+    float a0 = abs(u0);
+    float a1 = abs(u1);
+    float maximum = max(a0, a1);
+    float minimum = (u0 * u1 <= 0.0) ? 0.0 : min(a0, a1);
+    float tolerance = max(params.crossingTolerance, 0.0);
+
+    int lowCell = int(floor(max(minimum - tolerance, 0.0)));
+    int highCell = int(floor(maximum + tolerance));
+
+    return highCell != lowCell;
+}
+
+bool boundaryCrossed(
+    float z0,
+    float z1,
+    int sigma,
+    TesseractState state0
+)
+{
+    if (isnan(z1) || isinf(z1))
+        return true;
+
+    float midpoint = 0.5 * (z0 + z1);
+
+    if (parityBoundaryCrossed(z0, z1))
+        return true;
+
+    TesseractState stateMid = evaluateTesseract(D(midpoint, 1.0), sigma);
+    TesseractState state1 = evaluateTesseract(D(z1, 1.0), sigma);
+
+    return
+        certificateChanged(state0, stateMid) ||
+        certificateChanged(stateMid, state1);
+}
+
+// -----------------------------------------------------------------------------
+// Literal recurrence.
+// -----------------------------------------------------------------------------
+
+int selectedSigma(float z)
+{
+    if (params.forceSigma > 0)
+        return +1;
+
+    if (params.forceSigma < 0)
+        return -1;
+
+    return z >= 0.0 ? +1 : -1;
+}
+
+float recurrenceValue(
+    float z,
+    float dJLimited,
+    float residual,
+    float dM,
+    float jumpM,
+    float iota
+)
+{
+    float u = 1.5 * (z + params.c);
+    float parity = mod(floor(abs(u)), 2.0);
+
+    float normalization = sqrt(max(
+        z * z + params.c * params.c + params.epsilonN,
+        SAFE_EPS
+    ));
+
+    float correction =
+          params.kappa * u
+        - params.alpha * dJLimited
+        + params.chi * residual
+        - params.zeta * (
+              dM
+            + params.omegaDelta * iota * jumpM
+          );
+
+    return
+          u * u
+        + params.c
+        + (parity / normalization) * correction;
+}
+
+void main()
+{
+    uint index = gl_GlobalInvocationID.x;
+
+    if (index >= params.elementCount)
+        return;
+
+    float z = zCurrent[index];
+    int sigma = selectedSigma(z);
+
+    // Exact active-side state and exact opposite-side state at the same z_n.
+    TesseractState activeStateT = evaluateTesseract(D(z, 1.0), sigma);
+    TesseractState oppositeStateT = evaluateTesseract(D(z, 1.0), -sigma);
+
+    float dJLimited = activeStateT.scalar[H_J_LIMITED].dz;
+    float residual = activeStateT.scalar[H_RESIDUAL].v;
+    float dM = activeStateT.scalar[H_M].dz;
+
+    float MPlus = sigma > 0
+        ? activeStateT.scalar[H_M].v
+        : oppositeStateT.scalar[H_M].v;
+
+    float MMinus = sigma < 0
+        ? activeStateT.scalar[H_M].v
+        : oppositeStateT.scalar[H_M].v;
+
+    float jumpM = MPlus - MMinus;
+
+    // First pass: iota_n = 0. Then certify whether a parity, classifier, or
+    // KKT active-set boundary was crossed and re-evaluate the literal map.
+    float provisional = recurrenceValue(
+        z,
+        dJLimited,
+        residual,
+        dM,
+        jumpM,
+        0.0
+    );
+
+    bool crossed = boundaryCrossed(
+        z,
+        provisional,
+        sigma,
+        activeStateT
+    );
+
+    float iota = crossed ? 1.0 : 0.0;
+
+    float result = recurrenceValue(
+        z,
+        dJLimited,
+        residual,
+        dM,
+        jumpM,
+        iota
+    );
+
+    zNext[index] = result;
+
+    float u = 1.5 * (z + params.c);
+    float parity = mod(floor(abs(u)), 2.0);
+    float normalization = sqrt(max(
+        z * z + params.c * params.c + params.epsilonN,
+        SAFE_EPS
+    ));
+
+    DebugRecord debugValue;
+    debugValue.mapTerms = vec4(z, u, parity, normalization);
+    debugValue.correctionTerms = vec4(dJLimited, residual, dM, jumpM);
+    debugValue.branchTerms = vec4(MMinus, MPlus, iota, float(sigma));
+    debugValue.carterTerms = vec4(
+        activeStateT.scalar[H_X_PLUS].v,
+        activeStateT.scalar[H_X_MINUS].v,
+        activeStateT.scalar[H_X_CROSS].v,
+        activeStateT.scalar[H_LAMBDA].v
+    );
+    debugValue.masks = uvec4(
+        uint(max(activeStateT.kkt.activeMask, 0)),
+        activeStateT.classifierMask,
+        crossed ? 1u : 0u,
+        activeStateT.kkt.valid != 0 ? 1u : 0u
+    );
+
+    debugRecords[index] = debugValue;
+}

@@ -1,0 +1,11 @@
+* text=auto
+*.py text eol=lf
+*.md text eol=lf
+*.slang text eol=lf
+*.comp text eol=lf
+*.ps1 text eol=crlf
+*.json text eol=lf
+*.png binary
+
+carter_tesseract_full.slang linguist-generated=true
+carter_tesseract_conditioned.slang linguist-generated=true

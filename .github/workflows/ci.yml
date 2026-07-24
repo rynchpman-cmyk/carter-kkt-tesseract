@@ -1,0 +1,35 @@
+name: source integrity
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Compile Python sources
+        run: python -m compileall -q .
+
+      - name: Validate portable artifacts
+        run: python -m unittest discover -s tests -v
+
+      - name: Regenerate baseline Slang
+        run: |
+          python migrate_full_slang.py \
+            --model hybrid_model.json \
+            --output /tmp/carter_tesseract_full.slang
+          cmp carter_tesseract_full.slang /tmp/carter_tesseract_full.slang
+
+      - name: Regenerate conditioned Slang
+        run: |
+          python migrate_full_slang.py \
+            --model hybrid_model_conditioned.json \
+            --output /tmp/carter_tesseract_conditioned.slang
+          cmp carter_tesseract_conditioned.slang /tmp/carter_tesseract_conditioned.slang

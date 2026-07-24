@@ -1,0 +1,26 @@
+name: Experiment proposal
+description: Propose a new dynamical, physical, or differentiation experiment.
+title: "[experiment] "
+labels: ["experiment"]
+body:
+  - type: textarea
+    id: hypothesis
+    attributes:
+      label: Hypothesis
+      description: State the claim that the experiment should test.
+    validations:
+      required: true
+  - type: textarea
+    id: protocol
+    attributes:
+      label: Protocol
+      description: Initial states, horizons, losses, controls, and comparison baselines.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: Include KKT validity, switching margins, gradient audits, and Lyapunov metrics.
+    validations:
+      required: true
