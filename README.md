@@ -204,7 +204,14 @@ See [CONTRIBUTING.md](CONTRIBUTING.md). Please preserve the separation between
 hard decisions and continuous differentiation, and include finite-difference
 evidence for derivative changes.
 
+## Citation
+
+If you use Carter/KKT Tesseract in research, please cite the project using the
+machine-readable metadata in [CITATION.cff](CITATION.cff). GitHub exposes this
+metadata through its **Cite this repository** interface.
+
 ## License
 
-No open-source license has been selected yet. Until one is added, normal
-copyright restrictions apply.
+Carter/KKT Tesseract is licensed under the
+[Apache License 2.0](LICENSE). Attribution information is provided in
+[NOTICE](NOTICE).

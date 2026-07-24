@@ -33,8 +33,8 @@ gh repo create carter-kkt-tesseract `
     --push
 ```
 
-Or replace `--private` with `--public` after selecting a license and reviewing
-the repository contents.
+Or replace `--private` with `--public` after reviewing the repository contents.
+This project is distributed under the Apache License 2.0.
 
 Set topics:
 
@@ -51,7 +51,7 @@ gh repo edit --add-topic automatic-differentiation `
 
 ## Before making the repository public
 
-1. Select and add an explicit license.
+1. Confirm that `LICENSE`, `NOTICE`, and `CITATION.cff` are current.
 2. Confirm whether portable trained weights should be publicly redistributed.
 3. Confirm the desired author identity for commits and citation metadata.
 4. Re-run `python -m unittest discover -s tests -v`.
