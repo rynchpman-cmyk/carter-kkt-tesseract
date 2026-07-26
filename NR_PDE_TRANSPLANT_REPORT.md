@@ -159,3 +159,7 @@ This still does not establish:
 The next promotion milestone is a resolution-matched constrained initial-data
 ladder, followed by longer evolutions, higher-order interface reconstruction,
 independent-code comparison, and eventual Slang/Vulkan parity.
+
+The resolution-matched periodic CMC ladder has since passed. Its construction,
+timestep boundary, joint CCZ4 convergence, and remaining limitations are in
+`CONSTRAINED_NEURAL_SPACETIME_REPORT.md`.

@@ -198,6 +198,20 @@ switching, Legendre, thermodynamic, hyperbolicity, causality, and
 self-convergence gates. Its scope and measurements are in the
 [neural PDE promotion report](NEURAL_PDE_PROMOTION_REPORT.md).
 
+Construct and evolve resolution-matched active-neural CMC spacetimes with:
+
+```powershell
+.\run_tesseract_nr_constrained.ps1 `
+    -Resolutions 8,16,32 `
+    -FinalTime 1e-6 `
+    -Output tesseract_nr_constrained_results.json
+```
+
+The recorded constrained ladder uses 10/20/40 complete steps and obtains
+approximately second-order convergence of the Hamiltonian constraint,
+momentum constraint, evolved state, and geometric-work energy rate. See the
+[constrained neural spacetime report](CONSTRAINED_NEURAL_SPACETIME_REPORT.md).
+
 ### Retrain the conditioned model
 
 ```powershell
@@ -271,6 +285,8 @@ For the exact environment and validation sequence, see
 | `run_tesseract_nr.ps1` | PowerShell entrypoint for the NR backend |
 | `run_tesseract_nr_convergence.py` | Analytic/frozen nested-grid study |
 | `tesseract_nr_convergence_results.json` | Recorded active-neural ladder |
+| `run_tesseract_nr_constrained.py` | Constraint-converged neural spacetime ladder |
+| `tesseract_nr_constrained_results.json` | Recorded CMC/CCZ4 convergence evidence |
 | `migrate_full_slang.py` | Deterministic GLSL-to-Slang migration and native kernels |
 | `progressive_full_unroll.py` | Piecewise BPTT, continuation, margins, and validation |
 | `train_lyapunov_conditioned.py` | Intrinsic attractor and Lyapunov curriculum |
@@ -294,6 +310,7 @@ artifacts contain everything needed to regenerate the tracked Slang modules.
 - [Theory 3.3 experiment report](THEORY33_EXPERIMENT_REPORT.md)
 - [Advanced frozen-constitutive report](THEORY33_ADVANCED_REPORT.md)
 - [Frozen neural PDE promotion report](NEURAL_PDE_PROMOTION_REPORT.md)
+- [Constraint-converged neural spacetime report](CONSTRAINED_NEURAL_SPACETIME_REPORT.md)
 - [Lyapunov conditioning](docs/LYAPUNOV_CONDITIONING.md)
 - [Visualization instrument](docs/VISUALIZATION.md)
 - [Reproducibility and validation](docs/REPRODUCIBILITY.md)

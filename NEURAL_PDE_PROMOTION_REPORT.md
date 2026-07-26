@@ -144,23 +144,27 @@ The generated report requires all of the following:
 
 All gates passed on the recorded ladder.
 
-## Scope and remaining boundary
+## Scope and subsequent boundary
 
 This is the first active-neural resolution ladder, not yet a strong-field
 continuum solution. Its geometry starts flat while the material source is
 nonzero, so the reported Hamiltonian constraint is intentionally not used as
 a continuum qualification claim.
 
-The next honest ladder is:
+That next ladder has now been completed for a smooth periodic CMC spacetime;
+see `CONSTRAINED_NEURAL_SPACETIME_REPORT.md`. It uses pointwise
+momentum-compatible counterflow, resolution-matched elliptic data, and
+10/20/40 complete evolution steps.
 
-1. construct resolution-matched CMC/CTT data for the active learned phase;
-2. converge the elliptic and evolved CCZ4 constraints together;
-3. extend the evolution time and resolution range;
-4. replace first-order interface states with qualified higher-order
+The remaining ladder is:
+
+1. extend the evolution time and resolution range;
+2. replace first-order interface states with qualified higher-order
    reconstruction;
-5. scan the learned phase up to, but not through, its measured causal edge;
-6. compare against an independent implementation;
-7. only then lower the qualified frozen path to Slang/Vulkan.
+3. scan the learned phase up to, but not through, its measured causal edge;
+4. generalize the compatible data to multiple dimensions;
+5. compare against an independent implementation;
+6. only then lower the qualified frozen path to Slang/Vulkan.
 
 The learned PSD mobility is still diagnostic at this milestone. Promoting it
 into the dissipative source operator is a separate thermodynamic change and

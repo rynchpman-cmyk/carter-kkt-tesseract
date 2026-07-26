@@ -37,6 +37,8 @@ explains the final system from the inside out.
 14. [Frozen neural PDE promotion](../NEURAL_PDE_PROMOTION_REPORT.md) —
     active learned primitive recovery/RHS and the first analytic/frozen
     continuum ladder.
+15. [Constraint-converged neural spacetime](../CONSTRAINED_NEURAL_SPACETIME_REPORT.md)
+    — compatible CMC data, full evolution, and joint CCZ4 convergence.
 
 Measured outputs are preserved separately:
 
@@ -46,3 +48,4 @@ Measured outputs are preserved separately:
 - [Advanced frozen-constitutive report](../THEORY33_ADVANCED_REPORT.md)
 - [NR PDE transplant report](../NR_PDE_TRANSPLANT_REPORT.md)
 - [Frozen neural PDE promotion](../NEURAL_PDE_PROMOTION_REPORT.md)
+- [Constraint-converged neural spacetime](../CONSTRAINED_NEURAL_SPACETIME_REPORT.md)

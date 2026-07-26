@@ -92,6 +92,17 @@ Run the active learned-phase analytic/frozen convergence ladder with:
     -Output tesseract_nr_convergence_results.json
 ```
 
+Run the stricter constraint-converged active-neural spacetime ladder with:
+
+```powershell
+.\run_tesseract_nr_constrained.ps1 `
+    -Resolutions 8,16,32 `
+    -FinalTime 1e-6 `
+    -PicardIterations 3 `
+    -EllipticTolerance 2e-8 `
+    -Output tesseract_nr_constrained_results.json
+```
+
 Save a restartable checkpoint with:
 
 ```powershell
@@ -111,6 +122,11 @@ self-convergence, analytic/frozen separation, conservation, entropy,
 switching, convexity, and per-cell characteristic margins. See the
 [promotion report](../NEURAL_PDE_PROMOTION_REPORT.md) for the recorded
 results and the current continuum boundary.
+
+The constrained runner solves pointwise momentum-compatible Carter
+counterflow and periodic CMC geometry together. Its recorded initial and
+evolved CCZ4 constraints converge at approximately second order. See the
+[constrained spacetime report](../CONSTRAINED_NEURAL_SPACETIME_REPORT.md).
 
 ## Validation boundary
 
