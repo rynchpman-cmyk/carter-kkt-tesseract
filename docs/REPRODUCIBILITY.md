@@ -185,6 +185,20 @@ Requires:
 - non-increasing Lyapunov value;
 - convergence at horizons 64 and 128.
 
+### 9. Neural numerical-relativity frontier
+
+```powershell
+.\run_tesseract_nr_frontier.ps1 `
+    -HorizonSteps 128 `
+    -Output tesseract_nr_frontier_results.json
+```
+
+This CPU campaign verifies the coupled WENO5-Z order, runs constrained
+analytic and frozen models for 128 steps, measures the 2D
+6x6/12x12/24x24 continuum ladder, and completes a 6x6x6 frozen-neural
+constraint/evolution smoke. The tracked JSON is the machine-readable
+qualification record.
+
 ## Retraining
 
 ```powershell

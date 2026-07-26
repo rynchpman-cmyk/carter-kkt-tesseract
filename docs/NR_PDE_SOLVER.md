@@ -45,6 +45,8 @@ law.
 - Stage-local nonlinear multifluid primitive recovery.
 - Stage-local projection of redundant entropy onto the master manifold.
 - Exact split mixed-vector damping and implicit entropy-positive carrier drag.
+- Piecewise-constant, MUSCL-MC, or WENO5-Z coupled flux reconstruction.
+- Selectable Lie or second-order Strang source splitting.
 - Periodic or finite Cartesian grids with explicit physical boundaries.
 
 The existing scalar Tesseract recurrence is not used as coordinate time. It
@@ -127,6 +129,20 @@ The constrained runner solves pointwise momentum-compatible Carter
 counterflow and periodic CMC geometry together. Its recorded initial and
 evolved CCZ4 constraints converge at approximately second order. See the
 [constrained spacetime report](../CONSTRAINED_NEURAL_SPACETIME_REPORT.md).
+
+Run the high-order multidimensional campaign with:
+
+```powershell
+.\run_tesseract_nr_frontier.ps1 `
+    -HorizonSteps 128 `
+    -Output tesseract_nr_frontier_results.json
+```
+
+This qualifies the reconstructed coupled flux in isolation, advances
+analytic and frozen constrained states for 128 steps, runs a 2D
+6x6/12x12/24x24 convergence ladder, and crosses the complete 3D
+constraint/evolution path. See the
+[frontier report](../NEURAL_SPACETIME_FRONTIER_REPORT.md).
 
 ## Validation boundary
 

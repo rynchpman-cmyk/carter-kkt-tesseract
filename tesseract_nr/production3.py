@@ -32,6 +32,9 @@ class Theory3ProductionParameters:
     cleaning_damping: float = 1.0
     minimum_total_enthalpy: float = 1.0e-13
     atmosphere_gravitates: bool = False
+    flux_reconstruction: str = "piecewise_constant"
+    reconstruction_theta: float = 1.5
+    source_splitting: str = "lie"
 
     def __post_init__(self) -> None:
         if self.recovery_tolerance <= 0.0 or self.recovery_iterations < 20:
@@ -40,6 +43,19 @@ class Theory3ProductionParameters:
             raise ValueError("cleaning_damping must be nonnegative")
         if self.minimum_total_enthalpy <= 0.0:
             raise ValueError("minimum_total_enthalpy must be positive")
+        if self.flux_reconstruction not in {
+            "piecewise_constant",
+            "muscl_mc",
+            "weno5_z",
+        }:
+            raise ValueError(
+                "flux_reconstruction must be piecewise_constant, muscl_mc, "
+                "or weno5_z"
+            )
+        if not 1.0 <= self.reconstruction_theta <= 2.0:
+            raise ValueError("reconstruction_theta must lie in [1, 2]")
+        if self.source_splitting not in {"lie", "strang"}:
+            raise ValueError("source_splitting must be lie or strang")
 
 
 @dataclass
@@ -470,9 +486,108 @@ class Theory3ProductionSolver:
         face_speed = np.maximum(speed, self._roll(speed, -1, axis))
         component_axes = conserved.ndim - self.grid.ndim
         face_speed = face_speed.reshape((1,) * component_axes + self.grid.shape)
-        return 0.5 * (flux + neighbor_flux) - 0.5 * face_speed * (
-            neighbor_state - conserved
+        if (
+            self.production_parameters.flux_reconstruction
+            == "piecewise_constant"
+        ):
+            return 0.5 * (flux + neighbor_flux) - 0.5 * face_speed * (
+                neighbor_state - conserved
+            )
+
+        if self.production_parameters.flux_reconstruction == "muscl_mc":
+            state_slope = self._mc_slope(conserved, axis)
+            flux_slope = self._mc_slope(flux, axis)
+            left_state = conserved + 0.5 * state_slope
+            right_state = neighbor_state - 0.5 * self._roll(
+                state_slope, -1, axis
+            )
+            left_flux = flux + 0.5 * flux_slope
+            right_flux = neighbor_flux - 0.5 * self._roll(
+                flux_slope, -1, axis
+            )
+        else:
+            left_state, right_state = self._weno5_z_faces(
+                conserved, axis
+            )
+            left_flux, right_flux = self._weno5_z_faces(flux, axis)
+        return 0.5 * (left_flux + right_flux) - 0.5 * face_speed * (
+            right_state - left_state
         )
+
+    @staticmethod
+    def _minmod(*values: Array) -> Array:
+        """Return the componentwise minmod of equally shaped arrays."""
+        stacked = np.stack(values, axis=0)
+        same_sign = np.all(stacked > 0.0, axis=0) | np.all(
+            stacked < 0.0, axis=0
+        )
+        magnitude = np.min(np.abs(stacked), axis=0)
+        return np.where(same_sign, np.sign(stacked[0]) * magnitude, 0.0)
+
+    def _mc_slope(self, field: Array, axis: int) -> Array:
+        """Monotonized-central MUSCL slope in cell-average units.
+
+        Reconstructing both the conserved state and its physical flux gives a
+        second-order local Lax--Friedrichs interface on smooth solutions while
+        retaining the old piecewise-constant path as an explicit control.
+        """
+        previous = self._roll(field, 1, axis)
+        following = self._roll(field, -1, axis)
+        backward = field - previous
+        forward = following - field
+        centered = 0.5 * (following - previous)
+        theta = self.production_parameters.reconstruction_theta
+        return self._minmod(theta * backward, centered, theta * forward)
+
+    @staticmethod
+    def _weno5_z_combine(
+        v0: Array,
+        v1: Array,
+        v2: Array,
+        v3: Array,
+        v4: Array,
+    ) -> Array:
+        """Fifth-order WENO-Z reconstruction at the right stencil face."""
+        q0 = (2.0 * v0 - 7.0 * v1 + 11.0 * v2) / 6.0
+        q1 = (-v1 + 5.0 * v2 + 2.0 * v3) / 6.0
+        q2 = (2.0 * v2 + 5.0 * v3 - v4) / 6.0
+        beta0 = (
+            (13.0 / 12.0) * (v0 - 2.0 * v1 + v2) ** 2
+            + 0.25 * (v0 - 4.0 * v1 + 3.0 * v2) ** 2
+        )
+        beta1 = (
+            (13.0 / 12.0) * (v1 - 2.0 * v2 + v3) ** 2
+            + 0.25 * (v1 - v3) ** 2
+        )
+        beta2 = (
+            (13.0 / 12.0) * (v2 - 2.0 * v3 + v4) ** 2
+            + 0.25 * (3.0 * v2 - 4.0 * v3 + v4) ** 2
+        )
+        tau5 = np.abs(beta0 - beta2)
+        scale = np.maximum.reduce(
+            (np.abs(v0), np.abs(v1), np.abs(v2), np.abs(v3), np.abs(v4))
+        )
+        epsilon = 1.0e-26 + 1.0e-12 * scale**2
+        alpha0 = 0.1 * (1.0 + (tau5 / (beta0 + epsilon)) ** 2)
+        alpha1 = 0.6 * (1.0 + (tau5 / (beta1 + epsilon)) ** 2)
+        alpha2 = 0.3 * (1.0 + (tau5 / (beta2 + epsilon)) ** 2)
+        normalization = alpha0 + alpha1 + alpha2
+        return (
+            alpha0 * q0 + alpha1 * q1 + alpha2 * q2
+        ) / normalization
+
+    def _weno5_z_faces(
+        self, field: Array, axis: int
+    ) -> tuple[Array, Array]:
+        """Return left/right values at every cell's right interface."""
+        im2 = self._roll(field, 2, axis)
+        im1 = self._roll(field, 1, axis)
+        ip1 = self._roll(field, -1, axis)
+        ip2 = self._roll(field, -2, axis)
+        ip3 = self._roll(field, -3, axis)
+        left = self._weno5_z_combine(im2, im1, field, ip1, ip2)
+        right = self._weno5_z_combine(ip3, ip2, ip1, field, im1)
+        return left, right
 
     def _face_value(self, field: Array, axis: int, side: int) -> Array:
         array_axis = field.ndim - self.grid.ndim + axis

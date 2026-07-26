@@ -1187,7 +1187,19 @@ class Theory33ProductionSolver(Theory3ProductionSolver):
         entropy_before_step = float(self.grid.integrate(state.matter.entropy))
         self.last_projection_entropy_change = 0.0
         self.last_projection_minimum_change = 0.0
-        values = self._pack(state)
+        strang = self.production_parameters.source_splitting == "strang"
+        if strang:
+            split_state = self._apply_carrier_drag(state, 0.5 * dt)
+            first_drag_heat = self.last_drag_heat
+            first_drag_entropy = self.last_drag_entropy_change
+            split_state = self._apply_damping(split_state, 0.5 * dt)
+            first_damping = self.last_damping_report
+        else:
+            split_state = state
+            first_drag_heat = 0.0
+            first_drag_entropy = 0.0
+            first_damping = FiniteDampingReport()
+        values = self._pack(split_state)
         time = state.time
 
         def stage(
@@ -1231,8 +1243,41 @@ class Theory33ProductionSolver(Theory3ProductionSolver):
         result.geometry = self.ccz4.project_algebraic(result.geometry)
         result.geometry.time = result.time
         result = self._project_to_master_manifold(result)
-        result = self._apply_carrier_drag(result, dt)
-        result = self._apply_damping(result, dt)
+        result = self._apply_carrier_drag(
+            result, 0.5 * dt if strang else dt
+        )
+        if strang:
+            self.last_drag_heat += first_drag_heat
+            self.last_drag_entropy_change += first_drag_entropy
+        result = self._apply_damping(result, 0.5 * dt if strang else dt)
+        if strang:
+            second_damping = self.last_damping_report
+            self.last_damping_report = FiniteDampingReport(
+                vector_energy_change=(
+                    first_damping.vector_energy_change
+                    + second_damping.vector_energy_change
+                ),
+                vector_momentum_change=tuple(
+                    first + second
+                    for first, second in zip(
+                        first_damping.vector_momentum_change,
+                        second_damping.vector_momentum_change,
+                        strict=True,
+                    )
+                ),
+                irreversible_heat=(
+                    first_damping.irreversible_heat
+                    + second_damping.irreversible_heat
+                ),
+                total_energy_balance_error=(
+                    first_damping.total_energy_balance_error
+                    + second_damping.total_energy_balance_error
+                ),
+                maximum_gauss_change=max(
+                    first_damping.maximum_gauss_change,
+                    second_damping.maximum_gauss_change,
+                ),
+            )
         self.recover(result)
         actual_number_change = charge_to_number * self.grid.integrate(
             result.target_charge - state.target_charge

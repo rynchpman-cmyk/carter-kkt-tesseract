@@ -48,42 +48,72 @@ def balanced_active_counterflow(
     compatibility condition without removing the relative current.
     """
     grid = solver.grid
-    (coordinate,) = grid.coordinates()
-    phase = 2.0 * np.pi * coordinate / grid.lengths[0]
-    density = 0.1 * (1.0 + 0.01 * np.cos(phase))
-    carrier_density = 0.005 * (1.0 + 0.01 * np.cos(phase))
+    coordinates = grid.coordinates()
+    phases = tuple(
+        2.0 * np.pi * coordinate / length
+        for coordinate, length in zip(
+            coordinates, grid.lengths, strict=True
+        )
+    )
+    modulation = sum(np.cos(phase) for phase in phases) / grid.ndim
+    if grid.ndim > 1:
+        modulation += 0.25 * np.prod(
+            np.stack(tuple(np.sin(phase) for phase in phases), axis=0),
+            axis=0,
+        )
+    density = 0.1 * (1.0 + 0.01 * modulation)
+    carrier_density = 0.005 * (1.0 + 0.01 * modulation)
     internal = np.full(grid.shape, 0.15)
     carrier_velocity = grid.zeros((3,))
-    carrier_velocity[0] = 0.125 + 0.001 * np.cos(phase)
+    carrier_velocity[0] = 0.125 + 0.001 * np.cos(phases[0])
+    for axis in range(1, grid.ndim):
+        carrier_velocity[axis] = (
+            0.025 * np.sin(phases[axis - 1])
+            + 0.01 * np.cos(phases[axis])
+        )
     carrier = CarrierPrimitive(carrier_density, carrier_velocity)
 
-    def momentum(fluid_speed: Array) -> Array:
-        velocity = grid.zeros((3,))
-        velocity[0] = fluid_speed
+    def momentum(multiplier: Array) -> Array:
+        velocity = multiplier[None, ...] * carrier_velocity
         fluid = FluidPrimitive(
             density,
             internal,
             velocity,
             grid.zeros(),
         )
-        return solver.master.evaluate(h, fluid, carrier).stress.momentum[0]
+        return solver.master.evaluate(h, fluid, carrier).stress.momentum
 
-    lower = np.full(grid.shape, -0.05)
-    upper = np.full(grid.shape, 0.01)
+    carrier_norm_sq = np.einsum(
+        "ij...,i...,j...->...", h, carrier_velocity, carrier_velocity
+    )
+    lower = np.full(grid.shape, -0.6)
+    upper = np.full(grid.shape, 0.1)
     lower_momentum = momentum(lower)
     upper_momentum = momentum(upper)
-    if np.any(lower_momentum >= 0.0) or np.any(upper_momentum <= 0.0):
+    lower_projection = np.einsum(
+        "i...,i...->...", lower_momentum, carrier_velocity
+    )
+    upper_projection = np.einsum(
+        "i...,i...->...", upper_momentum, carrier_velocity
+    )
+    if (
+        np.any(carrier_norm_sq <= 0.0)
+        or np.any(lower_projection >= 0.0)
+        or np.any(upper_projection <= 0.0)
+    ):
         raise FloatingPointError(
             "active counterflow momentum root is not bracketed"
         )
     for _ in range(60):
         middle = 0.5 * (lower + upper)
         middle_momentum = momentum(middle)
-        upper = np.where(middle_momentum > 0.0, middle, upper)
-        lower = np.where(middle_momentum > 0.0, lower, middle)
+        middle_projection = np.einsum(
+            "i...,i...->...", middle_momentum, carrier_velocity
+        )
+        upper = np.where(middle_projection > 0.0, middle, upper)
+        lower = np.where(middle_projection > 0.0, lower, middle)
 
-    velocity = grid.zeros((3,))
-    velocity[0] = 0.5 * (lower + upper)
+    velocity = 0.5 * (lower + upper)[None, ...] * carrier_velocity
     fluid = FluidPrimitive(
         density,
         internal,
@@ -205,11 +235,12 @@ def _characteristic_diagnostics(
         solver.master.characteristic_audit(
             float(recovery.fluid.baryon_density[index]),
             float(recovery.fluid.specific_internal_energy[index]),
-            float(recovery.fluid.velocity[0][index]),
+            float(recovery.fluid.velocity[axis][index]),
             float(recovery.carrier.number_density[index]),
-            float(recovery.carrier.velocity[0][index]),
+            float(recovery.carrier.velocity[axis][index]),
         )
         for index in np.ndindex(solver.grid.shape)
+        for axis in range(solver.grid.ndim)
     ]
     maximum = max(audit.maximum_absolute_speed for audit in audits)
     return {

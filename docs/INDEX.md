@@ -39,6 +39,9 @@ explains the final system from the inside out.
     continuum ladder.
 15. [Constraint-converged neural spacetime](../CONSTRAINED_NEURAL_SPACETIME_REPORT.md)
     — compatible CMC data, full evolution, and joint CCZ4 convergence.
+16. [Neural spacetime frontier](../NEURAL_SPACETIME_FRONTIER_REPORT.md) —
+    WENO5-Z fluxes, Strang splitting, a 128-step constrained horizon, 2D
+    continuum convergence, and the complete 3D neural path.
 
 Measured outputs are preserved separately:
 
@@ -49,3 +52,4 @@ Measured outputs are preserved separately:
 - [NR PDE transplant report](../NR_PDE_TRANSPLANT_REPORT.md)
 - [Frozen neural PDE promotion](../NEURAL_PDE_PROMOTION_REPORT.md)
 - [Constraint-converged neural spacetime](../CONSTRAINED_NEURAL_SPACETIME_REPORT.md)
+- [Neural spacetime frontier](../NEURAL_SPACETIME_FRONTIER_REPORT.md)

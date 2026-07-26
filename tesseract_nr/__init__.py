@@ -9,6 +9,13 @@ from .ccz4 import CCZ4Parameters, CCZ4Solver, CCZ4State
 from .convergence import run_constitutive_convergence
 from .constrained_convergence import run_constrained_convergence
 from .frozen_closure import QualifiedFrozenClosure
+from .frontier import (
+    reconstruction_accuracy,
+    run_frontier_campaign,
+    run_long_horizon,
+    run_multidimensional_convergence,
+    run_three_dimensional_smoke,
+)
 from .grid import CartesianGrid, GhostZonePatch, PeriodicGrid
 from .matter import FluidPrimitive, IdealGasEOS
 from .production33 import (
@@ -32,6 +39,11 @@ __all__ = [
     "CCZ4Solver",
     "CCZ4State",
     "QualifiedFrozenClosure",
+    "reconstruction_accuracy",
+    "run_frontier_campaign",
+    "run_long_horizon",
+    "run_multidimensional_convergence",
+    "run_three_dimensional_smoke",
     "run_constitutive_convergence",
     "run_constrained_convergence",
     "CartesianGrid",

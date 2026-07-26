@@ -212,6 +212,20 @@ approximately second-order convergence of the Hamiltonian constraint,
 momentum constraint, evolved state, and geometric-work energy rate. See the
 [constrained neural spacetime report](CONSTRAINED_NEURAL_SPACETIME_REPORT.md).
 
+Run the high-order, long-horizon, multidimensional frontier campaign with:
+
+```powershell
+.\run_tesseract_nr_frontier.ps1 `
+    -HorizonSteps 128 `
+    -Output tesseract_nr_frontier_results.json
+```
+
+The recorded campaign qualifies fifth-order WENO5-Z reconstruction, a
+128-step constrained analytic/frozen horizon, second-order 2D CCZ4 and
+complete-state convergence on 6x6/12x12/24x24 grids, and the complete 6x6x6
+neural-spacetime path. See the
+[neural spacetime frontier report](NEURAL_SPACETIME_FRONTIER_REPORT.md).
+
 ### Retrain the conditioned model
 
 ```powershell
@@ -287,6 +301,8 @@ For the exact environment and validation sequence, see
 | `tesseract_nr_convergence_results.json` | Recorded active-neural ladder |
 | `run_tesseract_nr_constrained.py` | Constraint-converged neural spacetime ladder |
 | `tesseract_nr_constrained_results.json` | Recorded CMC/CCZ4 convergence evidence |
+| `run_tesseract_nr_frontier.py` | WENO, long-horizon, 2D/3D qualification campaign |
+| `tesseract_nr_frontier_results.json` | Recorded multidimensional frontier evidence |
 | `migrate_full_slang.py` | Deterministic GLSL-to-Slang migration and native kernels |
 | `progressive_full_unroll.py` | Piecewise BPTT, continuation, margins, and validation |
 | `train_lyapunov_conditioned.py` | Intrinsic attractor and Lyapunov curriculum |
@@ -311,6 +327,7 @@ artifacts contain everything needed to regenerate the tracked Slang modules.
 - [Advanced frozen-constitutive report](THEORY33_ADVANCED_REPORT.md)
 - [Frozen neural PDE promotion report](NEURAL_PDE_PROMOTION_REPORT.md)
 - [Constraint-converged neural spacetime report](CONSTRAINED_NEURAL_SPACETIME_REPORT.md)
+- [Neural spacetime frontier report](NEURAL_SPACETIME_FRONTIER_REPORT.md)
 - [Lyapunov conditioning](docs/LYAPUNOV_CONDITIONING.md)
 - [Visualization instrument](docs/VISUALIZATION.md)
 - [Reproducibility and validation](docs/REPRODUCIBILITY.md)

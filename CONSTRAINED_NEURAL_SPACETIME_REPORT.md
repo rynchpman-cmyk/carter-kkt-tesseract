@@ -131,3 +131,8 @@ establish:
 The next campaign should extend the qualified timestep horizon, introduce
 higher-order reconstructed fluxes, move to multidimensional constrained data,
 and compare invariant observables rather than only grid-state norms.
+
+That successor campaign is now complete for smooth data: see the
+[neural spacetime frontier report](NEURAL_SPACETIME_FRONTIER_REPORT.md) for
+the 128-step WENO5-Z horizon, 2D convergence ladder, and 3D path
+qualification. Shock, phase-interface, and strong-field claims remain open.
