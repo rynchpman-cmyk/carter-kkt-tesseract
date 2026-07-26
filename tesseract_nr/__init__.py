@@ -6,6 +6,8 @@ mixed-vector evolution before individual kernels are promoted to Vulkan.
 """
 
 from .ccz4 import CCZ4Parameters, CCZ4Solver, CCZ4State
+from .convergence import run_constitutive_convergence
+from .frozen_closure import QualifiedFrozenClosure
 from .grid import CartesianGrid, GhostZonePatch, PeriodicGrid
 from .matter import FluidPrimitive, IdealGasEOS
 from .production33 import (
@@ -28,6 +30,8 @@ __all__ = [
     "CCZ4Parameters",
     "CCZ4Solver",
     "CCZ4State",
+    "QualifiedFrozenClosure",
+    "run_constitutive_convergence",
     "CartesianGrid",
     "GhostZonePatch",
     "PeriodicGrid",

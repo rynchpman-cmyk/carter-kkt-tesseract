@@ -9,6 +9,7 @@ from the two conservation laws and the two momentum-vorticity equations.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 
@@ -91,6 +92,11 @@ class MasterState:
     source_charge_eulerian: Array
     source_current_up: Array
     drag_inertia: Array
+    invariant_gradient: Array
+    phase_two: Array
+    phase_threshold: Array
+    mobility_matrix: Array
+    constitutive_model: str
 
 
 @dataclass(frozen=True)
@@ -105,8 +111,27 @@ class CharacteristicAudit:
 
 
 class Theory33MasterFunction:
-    def __init__(self, parameters: Theory33MasterParameters | None = None) -> None:
+    def __init__(
+        self,
+        parameters: Theory33MasterParameters | None = None,
+        constitutive_closure: Any | None = None,
+    ) -> None:
         self.parameters = parameters or Theory33MasterParameters()
+        if (
+            constitutive_closure is not None
+            and getattr(constitutive_closure, "parameters", self.parameters)
+            != self.parameters
+        ):
+            raise ValueError(
+                "frozen constitutive artifact parameters do not match "
+                "the Theory 3.3 production parameters"
+            )
+        self.constitutive_closure = constitutive_closure
+        self.constitutive_model = (
+            "analytic_m1"
+            if constitutive_closure is None
+            else "qualified_frozen"
+        )
 
     def specific_entropy(self, density: Array, internal: Array) -> Array:
         p = self.parameters
@@ -145,6 +170,149 @@ class Theory33MasterFunction:
             / p.entrainment_scale_fourth
         )
 
+    def invariant_response(
+        self,
+        n_squared: Array,
+        d_squared: Array,
+        x_squared: Array,
+        entropy: Array,
+        *,
+        phase_override: Array | bool | None = None,
+    ) -> tuple[Array, Array, Array, Array, Array]:
+        """Return Lambda, its invariant gradient, hard phase, threshold, mobility.
+
+        The gradient order is ``(n², d², x², entropy)``.  A supplied phase
+        override freezes the nonsmooth classifier for a local Newton/Jacobian
+        evaluation; the ordinary public evaluation always classifies the
+        current state.
+        """
+        n2, d2, cross, sigma = np.broadcast_arrays(
+            np.asarray(n_squared, dtype=float),
+            np.asarray(d_squared, dtype=float),
+            np.asarray(x_squared, dtype=float),
+            np.asarray(entropy, dtype=float),
+        )
+        if self.constitutive_closure is not None:
+            if phase_override is None:
+                response = self.constitutive_closure.evaluate(
+                    n2, d2, cross, sigma
+                )
+            else:
+                response = self.constitutive_closure.evaluate_branch(
+                    n2, d2, cross, sigma, phase_override
+                )
+            return (
+                np.asarray(response.lambda_value, dtype=float),
+                np.asarray(response.lambda_gradient, dtype=float),
+                np.asarray(response.phase_two, dtype=bool),
+                np.asarray(response.phase_threshold, dtype=float),
+                np.asarray(response.mobility_matrix, dtype=float),
+            )
+
+        p = self.parameters
+        n = np.sqrt(np.maximum(n2, 1.0e-300))
+        d = np.sqrt(np.maximum(d2, 1.0e-300))
+        pressure = np.exp((p.gamma_ad - 1.0) * sigma) * n**p.gamma_ad
+        anchor = d - p.target_fraction * n
+        rho_n = (
+            1.0
+            + p.gamma_ad
+            * pressure
+            / np.maximum((p.gamma_ad - 1.0) * n, 1.0e-300)
+            - p.target_fraction * anchor / p.chemical_susceptibility
+        )
+        rho_d = (
+            p.carrier_K
+            * (1.0 + p.carrier_sound_speed**2)
+            * d ** (p.carrier_sound_speed**2)
+            + anchor / p.chemical_susceptibility
+        )
+        relative = cross - n * d
+        entrainment = p.entrainment_linear + (
+            p.entrainment_quadratic
+            * relative
+            / p.entrainment_scale_fourth
+        )
+        gradient = np.stack(
+            [
+                (-rho_n + entrainment * d)
+                / np.maximum(2.0 * n, 1.0e-300),
+                (-rho_d + entrainment * n)
+                / np.maximum(2.0 * d, 1.0e-300),
+                -entrainment,
+                -pressure,
+            ],
+            axis=-1,
+        )
+        shape = n.shape
+        return (
+            self.lambda_from_invariants(n2, d2, cross, sigma),
+            gradient,
+            np.zeros(shape, dtype=bool),
+            np.full(shape, np.inf),
+            np.zeros(shape + (2, 2), dtype=float),
+        )
+
+    def _thermodynamic_hessian(
+        self,
+        n: Array,
+        d: Array,
+        gamma_rel: Array,
+        entropy: Array,
+        phase_two: Array,
+    ) -> tuple[Array, Array, Array]:
+        p = self.parameters
+        if self.constitutive_closure is None:
+            pressure = np.exp((p.gamma_ad - 1.0) * entropy) * n**p.gamma_ad
+            return (
+                p.gamma_ad * pressure / np.maximum(n**2, 1.0e-300)
+                + p.target_fraction**2 / p.chemical_susceptibility,
+                np.full_like(n, -p.target_fraction / p.chemical_susceptibility),
+                p.carrier_K
+                * (1.0 + p.carrier_sound_speed**2)
+                * p.carrier_sound_speed**2
+                * d ** (p.carrier_sound_speed**2 - 1.0)
+                + 1.0 / p.chemical_susceptibility,
+            )
+
+        def chemical(
+            density: Array, carrier: Array
+        ) -> tuple[Array, Array]:
+            _, gradient, _, _, _ = self.invariant_response(
+                density**2,
+                carrier**2,
+                density * carrier * gamma_rel,
+                entropy,
+                phase_override=phase_two,
+            )
+            rho_n = -(
+                2.0 * density * gradient[..., 0]
+                + carrier * gamma_rel * gradient[..., 2]
+            )
+            rho_d = -(
+                2.0 * carrier * gradient[..., 1]
+                + density * gamma_rel * gradient[..., 2]
+            )
+            return rho_n, rho_d
+
+        step_n = 2.0e-5 * np.maximum(n, 1.0e-3)
+        step_d = 2.0e-5 * np.maximum(d, 1.0e-4)
+        rho_n_plus, rho_d_n_plus = chemical(n + step_n, d)
+        rho_n_minus, rho_d_n_minus = chemical(
+            np.maximum(n - step_n, 1.0e-300), d
+        )
+        rho_n_d_plus, rho_d_plus = chemical(n, d + step_d)
+        rho_n_d_minus, rho_d_minus = chemical(
+            n, np.maximum(d - step_d, 1.0e-300)
+        )
+        h_nn = (rho_n_plus - rho_n_minus) / (2.0 * step_n)
+        h_dd = (rho_d_plus - rho_d_minus) / (2.0 * step_d)
+        h_nd = 0.5 * (
+            (rho_n_d_plus - rho_n_d_minus) / (2.0 * step_d)
+            + (rho_d_n_plus - rho_d_n_minus) / (2.0 * step_n)
+        )
+        return h_nn, h_nd, h_dd
+
     def evaluate(
         self,
         h: Array,
@@ -168,44 +336,24 @@ class Theory33MasterFunction:
         x2 = n * d * gamma_rel
         relative = x2 - n * d
 
-        pressure = self.thermal_pressure(n, fluid.specific_internal_energy)
-        thermal = self.thermal_energy(n, fluid.specific_internal_energy)
         entropy = self.specific_entropy(n, fluid.specific_internal_energy)
-        anchor = d - p.target_fraction * n
-        carrier_energy = p.carrier_K * d ** (1.0 + p.carrier_sound_speed**2)
-        chemical_energy = 0.5 * anchor**2 / p.chemical_susceptibility
-        rho0 = thermal + carrier_energy + chemical_energy
-
-        Q = p.entrainment_linear + (
-            p.entrainment_quadratic
-            * relative
-            / p.entrainment_scale_fourth
+        (
+            lambda_mf,
+            invariant_gradient,
+            phase_two,
+            phase_threshold,
+            mobility_matrix,
+        ) = self.invariant_response(
+            n**2,
+            d**2,
+            x2,
+            entropy,
         )
-        lambda_mf = (
-            -rho0
-            - p.entrainment_linear * relative
-            - 0.5
-            * p.entrainment_quadratic
-            * relative**2
-            / p.entrainment_scale_fourth
-        )
-
-        rho_n = (
-            1.0
-            + p.gamma_ad
-            * pressure
-            / np.maximum((p.gamma_ad - 1.0) * n, 1.0e-300)
-            - p.target_fraction * anchor / p.chemical_susceptibility
-        )
-        rho_d = (
-            p.carrier_K
-            * (1.0 + p.carrier_sound_speed**2)
-            * d ** (p.carrier_sound_speed**2)
-            + anchor / p.chemical_susceptibility
-        )
-        B_N = (rho_n - Q * d) / n
-        B_D = (rho_d - Q * n) / d
-        entrainment = Q
+        B_N = -2.0 * invariant_gradient[..., 0]
+        B_D = -2.0 * invariant_gradient[..., 1]
+        entrainment = -invariant_gradient[..., 2]
+        rho_n = B_N * n + entrainment * d
+        rho_d = B_D * d + entrainment * n
         generalized_pressure = (
             lambda_mf
             + B_N * n**2
@@ -262,42 +410,43 @@ class Theory33MasterFunction:
         source_rho = p.carrier_charge * dW
         source_current = p.carrier_charge * dW[None, ...] * v
 
-        rho_nn = (
-            p.gamma_ad * pressure / np.maximum(n**2, 1.0e-300)
-            + p.target_fraction**2 / p.chemical_susceptibility
+        rho_nn, rho_nd, rho_dd = self._thermodynamic_hessian(
+            n,
+            d,
+            gamma_rel,
+            entropy,
+            phase_two,
         )
-        rho_nd = np.full_like(n, -p.target_fraction / p.chemical_susceptibility)
-        rho_dd = (
-            p.carrier_K
-            * (1.0 + p.carrier_sound_speed**2)
-            * p.carrier_sound_speed**2
-            * d ** (p.carrier_sound_speed**2 - 1.0)
-            + 1.0 / p.chemical_susceptibility
-        )
+        pressure = self.thermal_pressure(n, fluid.specific_internal_energy)
         temperature = pressure / np.maximum(n, 1.0e-300)
         drag_inertia = np.maximum(B_D * d**2, 0.0)
         return MasterState(
-            entropy,
-            temperature,
-            gamma_rel,
-            relative,
-            lambda_mf,
-            generalized_pressure,
-            B_N,
-            B_D,
-            entrainment,
-            rho_n,
-            rho_d,
-            rho_nn,
-            rho_nd,
-            rho_dd,
-            StressEnergy3p1(rho, momentum, stress, trace),
-            chi_down,
-            chi_normal,
-            dW,
-            source_rho,
-            source_current,
-            drag_inertia,
+            entropy_per_baryon=entropy,
+            temperature=temperature,
+            relative_lorentz_factor=gamma_rel,
+            relative_invariant=relative,
+            lambda_mf=lambda_mf,
+            generalized_pressure=generalized_pressure,
+            B_N=B_N,
+            B_D=B_D,
+            entrainment=entrainment,
+            chemical_N=rho_n,
+            chemical_D=rho_d,
+            thermodynamic_hessian_nn=rho_nn,
+            thermodynamic_hessian_nd=rho_nd,
+            thermodynamic_hessian_dd=rho_dd,
+            stress=StressEnergy3p1(rho, momentum, stress, trace),
+            carrier_momentum_down=chi_down,
+            carrier_momentum_normal=chi_normal,
+            carrier_eulerian_density=dW,
+            source_charge_eulerian=source_rho,
+            source_current_up=source_current,
+            drag_inertia=drag_inertia,
+            invariant_gradient=invariant_gradient,
+            phase_two=phase_two,
+            phase_threshold=phase_threshold,
+            mobility_matrix=mobility_matrix,
+            constitutive_model=self.constitutive_model,
         )
 
     def conserved_carrier(

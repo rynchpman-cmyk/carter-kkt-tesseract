@@ -34,6 +34,9 @@ explains the final system from the inside out.
 13. [NR PDE transplant report](../NR_PDE_TRANSPLANT_REPORT.md) — source
     boundary, state contract, first coupled run, regression evidence, and
     promotion gates.
+14. [Frozen neural PDE promotion](../NEURAL_PDE_PROMOTION_REPORT.md) —
+    active learned primitive recovery/RHS and the first analytic/frozen
+    continuum ladder.
 
 Measured outputs are preserved separately:
 
@@ -42,3 +45,4 @@ Measured outputs are preserved separately:
 - [Theory 3.3 experiment report](../THEORY33_EXPERIMENT_REPORT.md)
 - [Advanced frozen-constitutive report](../THEORY33_ADVANCED_REPORT.md)
 - [NR PDE transplant report](../NR_PDE_TRANSPLANT_REPORT.md)
+- [Frozen neural PDE promotion](../NEURAL_PDE_PROMOTION_REPORT.md)

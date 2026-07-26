@@ -97,3 +97,9 @@ jobs:
           --points 8
           --steps 1
           --dt 1e-5
+
+      - name: Run active frozen-constitutive convergence smoke
+        run: >-
+          python run_tesseract_nr_convergence.py
+          --resolutions 4 8 16
+          --final-time 1e-6

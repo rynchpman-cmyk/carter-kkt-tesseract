@@ -64,6 +64,20 @@ class NRFrozenBridgeTests(unittest.TestCase):
             atol=2.0e-7,
         )
 
+    def test_explicit_branch_evaluation_freezes_the_hard_classifier(self) -> None:
+        closure = QualifiedFrozenClosure()
+        point = (0.1**2, 0.005**2, 0.1 * 0.005 * 1.012, 1.0)
+        classified = closure.evaluate(*point)
+        phase_one = closure.evaluate_branch(*point, False)
+        phase_two = closure.evaluate_branch(*point, True)
+        self.assertTrue(bool(classified.phase_two))
+        self.assertFalse(bool(phase_one.phase_two))
+        self.assertTrue(bool(phase_two.phase_two))
+        self.assertGreater(
+            abs(float(phase_two.lambda_value - phase_one.lambda_value)),
+            1.0e-12,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

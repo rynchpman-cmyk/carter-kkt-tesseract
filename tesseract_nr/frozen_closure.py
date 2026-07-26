@@ -180,6 +180,41 @@ class QualifiedFrozenClosure:
         x_squared: np.ndarray,
         entropy: np.ndarray,
     ) -> FrozenInvariantResponse:
+        """Evaluate the frozen closure with its serialized hard phase decision."""
+        return self._evaluate(
+            n_squared,
+            d_squared,
+            x_squared,
+            entropy,
+            phase_override=None,
+        )
+
+    def evaluate_branch(
+        self,
+        n_squared: np.ndarray,
+        d_squared: np.ndarray,
+        x_squared: np.ndarray,
+        entropy: np.ndarray,
+        phase_two: np.ndarray | bool,
+    ) -> FrozenInvariantResponse:
+        """Evaluate one frozen hard branch without differentiating its switch."""
+        return self._evaluate(
+            n_squared,
+            d_squared,
+            x_squared,
+            entropy,
+            phase_override=phase_two,
+        )
+
+    def _evaluate(
+        self,
+        n_squared: np.ndarray,
+        d_squared: np.ndarray,
+        x_squared: np.ndarray,
+        entropy: np.ndarray,
+        *,
+        phase_override: np.ndarray | bool | None,
+    ) -> FrozenInvariantResponse:
         n2, d2, cross, sigma = np.broadcast_arrays(
             np.asarray(n_squared, dtype=float),
             np.asarray(d_squared, dtype=float),
@@ -206,7 +241,15 @@ class QualifiedFrozenClosure:
             + self.phase["fraction_coefficient"] * context[..., 2]
         )
         threshold_coordinate = phase_threshold / drift_scale
-        phase_two = relative >= phase_threshold
+        classified_phase = relative >= phase_threshold
+        phase_two = (
+            classified_phase
+            if phase_override is None
+            else np.broadcast_to(
+                np.asarray(phase_override, dtype=bool),
+                classified_phase.shape,
+            )
+        )
         drift_value, drift_derivative = (
             self._drift_value_and_derivative(coordinate)
         )

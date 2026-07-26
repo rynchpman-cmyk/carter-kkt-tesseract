@@ -9,6 +9,7 @@ from pathlib import Path
 
 import numpy as np
 
+from tesseract_nr.frozen_closure import QualifiedFrozenClosure
 from tesseract_nr.grid import PeriodicGrid
 from tesseract_nr.initial_constraints import (
     CTTParameters,
@@ -35,6 +36,17 @@ def parse_args() -> argparse.Namespace:
         help="number of matter/geometry Picard iterations",
     )
     parser.add_argument("--checkpoint", type=Path)
+    parser.add_argument(
+        "--constitutive",
+        choices=("analytic", "frozen"),
+        default="analytic",
+        help="select the analytic control or qualified frozen closure",
+    )
+    parser.add_argument(
+        "--artifact",
+        type=Path,
+        default=Path("theory33_frozen_variants.json"),
+    )
     return parser.parse_args()
 
 
@@ -135,7 +147,21 @@ def run(args: argparse.Namespace) -> dict[str, object]:
     if args.length <= 0.0 or args.steps < 0 or args.dt <= 0.0:
         raise ValueError("length and dt must be positive; steps must be nonnegative")
     grid = PeriodicGrid((args.points,), (args.length,), method="fd2")
-    solver = Theory33ProductionSolver(grid)
+    constitutive = getattr(args, "constitutive", "analytic")
+    artifact = getattr(
+        args,
+        "artifact",
+        Path("theory33_frozen_variants.json"),
+    )
+    closure = (
+        QualifiedFrozenClosure(artifact)
+        if constitutive == "frozen"
+        else None
+    )
+    solver = Theory33ProductionSolver(
+        grid,
+        constitutive_closure=closure,
+    )
     state, initial, constraint_report = build_smooth_state(
         solver,
         constraint_iterations=args.constraint_iterations,
@@ -151,6 +177,10 @@ def run(args: argparse.Namespace) -> dict[str, object]:
         "time": state.time,
         "state_arrays": len(solver._pack(state)),
         "scalar_components_per_cell": 52,
+        "constitutive_model": solver.constitutive_model,
+        "constitutive_variant_digest": (
+            solver.constitutive_variant_digest or ""
+        ),
         "initial_constraints": constraint_report,
         "initial": initial,
         "final": final,
@@ -180,7 +210,13 @@ def run(args: argparse.Namespace) -> dict[str, object]:
         save_theory33_production_state(
             args.checkpoint,
             state,
-            metadata={"runner": "run_tesseract_nr.py"},
+            metadata={
+                "runner": "run_tesseract_nr.py",
+                "constitutive_model": solver.constitutive_model,
+                "constitutive_variant_digest": (
+                    solver.constitutive_variant_digest or ""
+                ),
+            },
         )
         result["checkpoint"] = str(args.checkpoint)
     return result

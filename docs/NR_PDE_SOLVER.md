@@ -55,9 +55,14 @@ admissibility margins.
 `tesseract_nr.frozen_closure.QualifiedFrozenClosure` loads the qualified
 digest-protected artifact without fitting and exposes its master value,
 invariant gradient, learned phase decision, threshold, and PSD mobility to
-batched NR states. The production RHS retains the analytic M1 closure until
-this frozen response also passes primitive-recovery and conservative PDE
-promotion gates; artifact availability is not silently treated as authority.
+batched NR states. The frozen invariant gradient is now a selectable
+production authority in both primitive recovery and the PDE RHS. The analytic
+M1 path remains the control and uses the same constitutive interface.
+
+Hard phase decisions are held piecewise constant inside each local nonlinear
+solve. Recovery then reports the physical phase and distance to the switching
+surface. Branch-frozen constitutive derivatives also feed the Legendre,
+thermodynamic, and characteristic gates.
 
 ## Run
 
@@ -65,6 +70,26 @@ From the repository root:
 
 ```powershell
 .\run_tesseract_nr.ps1 -Points 16 -Steps 4 -Dt 1e-5
+```
+
+Run the constraint-constructed smoke problem through the frozen constitutive
+path with:
+
+```powershell
+.\run_tesseract_nr.ps1 `
+    -Points 16 `
+    -Steps 4 `
+    -Dt 1e-5 `
+    -Constitutive frozen
+```
+
+Run the active learned-phase analytic/frozen convergence ladder with:
+
+```powershell
+.\run_tesseract_nr_convergence.ps1 `
+    -Resolutions 8,16,32 `
+    -FinalTime 1e-5 `
+    -Output tesseract_nr_convergence_results.json
 ```
 
 Save a restartable checkpoint with:
@@ -80,6 +105,12 @@ python run_tesseract_nr.py `
 The runner reports conservation errors, CCZ4 and Gauss constraints, recovery
 residuals, convexity margins, relative counterflow, entropy production, and
 whether the evolved state remains qualified.
+
+The convergence runner measures full-state semidiscrete and evolved
+self-convergence, analytic/frozen separation, conservation, entropy,
+switching, convexity, and per-cell characteristic margins. See the
+[promotion report](../NEURAL_PDE_PROMOTION_REPORT.md) for the recorded
+results and the current continuum boundary.
 
 ## Validation boundary
 

@@ -72,6 +72,7 @@ class Theory33ProductionSolver(Theory3ProductionSolver):
         ccz4: CCZ4Parameters | None = None,
         grhd: GRHDParameters | None = None,
         production: Theory3ProductionParameters | None = None,
+        constitutive_closure: Any | None = None,
     ) -> None:
         master_parameters = master or Theory33MasterParameters()
         if vector is None:
@@ -85,7 +86,16 @@ class Theory33ProductionSolver(Theory3ProductionSolver):
             raise ValueError("Theory 3.3 master and vector gamma_ad must agree")
         super().__init__(grid, vector, ccz4, grhd, production)
         self.master_parameters = master_parameters
-        self.master = Theory33MasterFunction(master_parameters)
+        self.master = Theory33MasterFunction(
+            master_parameters,
+            constitutive_closure=constitutive_closure,
+        )
+        self.constitutive_model = self.master.constitutive_model
+        self.constitutive_variant_digest = getattr(
+            constitutive_closure,
+            "variant_digest",
+            None,
+        )
         self._primitive_guess: Array | None = None
         self.last_drag_heat = 0.0
         self.last_drag_entropy_change = 0.0
@@ -110,8 +120,8 @@ class Theory33ProductionSolver(Theory3ProductionSolver):
         h: np.ndarray,
         sqrt_h: float,
         entropy_per_baryon: float,
+        phase_override: bool | None = None,
     ) -> np.ndarray:
-        p = self.master_parameters
         n = float(np.exp(np.clip(x[0], -700.0, 700.0)))
         q_N = np.asarray(x[1:4], dtype=float)
         d = float(np.exp(np.clip(x[4], -700.0, 700.0)))
@@ -123,45 +133,18 @@ class Theory33ProductionSolver(Theory3ProductionSolver):
         u_down = h @ u
         v_down = h @ v
         gamma_rel = max(W_N * W_D - q_N @ h @ q_D, 1.0)
-        internal = self._entropy_internal(n, entropy_per_baryon)
-        pressure = (p.gamma_ad - 1.0) * n * internal
-        thermal = n * (1.0 + internal)
-        anchor = d - p.target_fraction * n
-        rho0 = (
-            thermal
-            + p.carrier_K * d ** (1.0 + p.carrier_sound_speed**2)
-            + 0.5 * anchor**2 / p.chemical_susceptibility
-        )
-        relative = n * d * (gamma_rel - 1.0)
-        Q = p.entrainment_linear + (
-            p.entrainment_quadratic
-            * relative
-            / p.entrainment_scale_fourth
-        )
-        Lambda = (
-            -rho0
-            - p.entrainment_linear * relative
-            - 0.5
-            * p.entrainment_quadratic
-            * relative**2
-            / p.entrainment_scale_fourth
-        )
-        rho_n = (
-            1.0
-            + p.gamma_ad
-            * pressure
-            / max((p.gamma_ad - 1.0) * n, 1.0e-300)
-            - p.target_fraction * anchor / p.chemical_susceptibility
-        )
-        rho_d = (
-            p.carrier_K
-            * (1.0 + p.carrier_sound_speed**2)
-            * d ** (p.carrier_sound_speed**2)
-            + anchor / p.chemical_susceptibility
-        )
-        B_N = (rho_n - Q * d) / n
-        B_D = (rho_d - Q * n) / d
         x2 = n * d * gamma_rel
+        Lambda, gradient, _, _, _ = self.master.invariant_response(
+            n**2,
+            d**2,
+            x2,
+            entropy_per_baryon,
+            phase_override=phase_override,
+        )
+        B_N = float(-2.0 * gradient[..., 0])
+        B_D = float(-2.0 * gradient[..., 1])
+        Q = float(-gradient[..., 2])
+        Lambda = float(Lambda)
         Psi = Lambda + B_N * n**2 + B_D * d**2 + 2.0 * Q * x2
         nW = n * W_N
         dW = d * W_D
@@ -176,6 +159,30 @@ class Theory33ProductionSolver(Theory3ProductionSolver):
         D_D = sqrt_h * dW
         P_D = D_D * chi
         return np.concatenate(([D_N, D_D], momentum, [energy], P_D))
+
+    def _cell_phase(
+        self,
+        x: np.ndarray,
+        h: np.ndarray,
+        entropy_per_baryon: float,
+    ) -> bool | None:
+        """Classify a primitive once for a piecewise-constant local solve."""
+        if self.master.constitutive_closure is None:
+            return None
+        n = float(np.exp(np.clip(x[0], -700.0, 700.0)))
+        d = float(np.exp(np.clip(x[4], -700.0, 700.0)))
+        q_N = np.asarray(x[1:4], dtype=float)
+        q_D = np.asarray(x[5:8], dtype=float)
+        W_N = float(np.sqrt(1.0 + q_N @ h @ q_N))
+        W_D = float(np.sqrt(1.0 + q_D @ h @ q_D))
+        gamma_rel = max(W_N * W_D - q_N @ h @ q_D, 1.0)
+        _, _, phase_two, _, _ = self.master.invariant_response(
+            n**2,
+            d**2,
+            n * d * gamma_rel,
+            entropy_per_baryon,
+        )
+        return bool(phase_two)
 
     @staticmethod
     def _cell_jacobian(function, point: np.ndarray) -> np.ndarray:
@@ -255,11 +262,17 @@ class Theory33ProductionSolver(Theory3ProductionSolver):
                 q0 = W0 * velocity
                 x = np.concatenate(([np.log(n0)], q0, [np.log(d0)], q0))
 
+            phase_override = self._cell_phase(
+                x,
+                h_flat[:, :, cell],
+                float(entropy_flat[cell]),
+            )
             function = lambda value: self._cell_predictions(
                 value,
                 h_flat[:, :, cell],
                 float(sqrt_flat[cell]),
                 float(entropy_flat[cell]),
+                phase_override,
             )
             best = np.inf
             for _ in range(self.production_parameters.recovery_iterations):
@@ -286,6 +299,16 @@ class Theory33ProductionSolver(Theory3ProductionSolver):
             final = float(np.max(np.abs((function(x) - target) / scale)))
             residuals[cell] = final
             if not np.isfinite(final) or final > 2.0e-6:
+                failed += 1
+            final_phase = self._cell_phase(
+                x,
+                h_flat[:, :, cell],
+                float(entropy_flat[cell]),
+            )
+            if (
+                phase_override is not None
+                and final_phase != phase_override
+            ):
                 failed += 1
             solved[:, cell] = x
 
@@ -405,6 +428,15 @@ class Theory33ProductionSolver(Theory3ProductionSolver):
                     ([np.log(n0), entropy_flat[cell]], q0, [np.log(d0)], q0)
                 )
 
+            primitive_for_phase = np.concatenate(
+                ([x[0]], x[2:5], [x[5]], x[6:9])
+            )
+            phase_override = self._cell_phase(
+                primitive_for_phase,
+                h_flat[:, :, cell],
+                float(x[1]),
+            )
+
             def function(value: np.ndarray) -> np.ndarray:
                 primitive = np.concatenate(
                     (
@@ -419,6 +451,7 @@ class Theory33ProductionSolver(Theory3ProductionSolver):
                     h_flat[:, :, cell],
                     float(sqrt_flat[cell]),
                     float(value[1]),
+                    phase_override,
                 )
 
             for _ in range(self.production_parameters.recovery_iterations):
@@ -442,6 +475,19 @@ class Theory33ProductionSolver(Theory3ProductionSolver):
             final = float(np.max(np.abs((function(x) - target) / scale)))
             residuals[cell] = final
             if not np.isfinite(final) or final > 2.0e-7:
+                failed += 1
+            primitive_final = np.concatenate(
+                ([x[0]], x[2:5], [x[5]], x[6:9])
+            )
+            final_phase = self._cell_phase(
+                primitive_final,
+                h_flat[:, :, cell],
+                float(x[1]),
+            )
+            if (
+                phase_override is not None
+                and final_phase != phase_override
+            ):
                 failed += 1
             solved[:, cell] = x
 
@@ -986,6 +1032,15 @@ class Theory33ProductionSolver(Theory3ProductionSolver):
                 )
             )
 
+            primitive_for_phase = np.concatenate(
+                ([x[0]], x[2:5], [x[5]], x[6:9])
+            )
+            phase_override = self._cell_phase(
+                primitive_for_phase,
+                h_flat[:, :, cell],
+                float(x[1]),
+            )
+
             def function(value: np.ndarray) -> np.ndarray:
                 primitive = np.concatenate(
                     (
@@ -1000,6 +1055,7 @@ class Theory33ProductionSolver(Theory3ProductionSolver):
                     h_flat[:, :, cell],
                     float(sqrt_flat[cell]),
                     float(value[1]),
+                    phase_override,
                 )
                 return np.concatenate(
                     (
@@ -1030,6 +1086,22 @@ class Theory33ProductionSolver(Theory3ProductionSolver):
             if not np.isfinite(final) or final > 2.0e-7:
                 raise FloatingPointError(
                     f"Theory 3.3 implicit drag solve failed in cell {cell}: {final:.3e}"
+                )
+            primitive_final = np.concatenate(
+                ([x[0]], x[2:5], [x[5]], x[6:9])
+            )
+            final_phase = self._cell_phase(
+                primitive_final,
+                h_flat[:, :, cell],
+                float(x[1]),
+            )
+            if (
+                phase_override is not None
+                and final_phase != phase_override
+            ):
+                raise FloatingPointError(
+                    "Theory 3.3 implicit drag solve crossed the frozen "
+                    f"constitutive branch in cell {cell}"
                 )
             entropy_increase[cell] = x[1] - old_entropy[cell]
             if entropy_increase[cell] < -2.0e-9:
@@ -1268,7 +1340,7 @@ class Theory33ProductionSolver(Theory3ProductionSolver):
         light_dt = cfl * min(self.grid.spacing) / np.sqrt(2.0 * self.grid.ndim)
         return min(light_dt, 0.2 * self.master_parameters.relaxation_time)
 
-    def diagnostics(self, state: Theory3ProductionState) -> dict[str, float | int]:
+    def diagnostics(self, state: Theory3ProductionState) -> dict[str, object]:
         recovery = self.recover(state)
         h, _ = self.ccz4.physical_geometry(state.geometry)
         sources = (
@@ -1298,6 +1370,24 @@ class Theory33ProductionSolver(Theory3ProductionSolver):
             "maximum_relative_lorentz_factor": recovery.report.maximum_relative_lorentz_factor,
             "minimum_legendre_eigenvalue": recovery.report.minimum_legendre_eigenvalue,
             "minimum_thermodynamic_eigenvalue": recovery.report.minimum_thermodynamic_eigenvalue,
+            "constitutive_model": recovery.master.constitutive_model,
+            "constitutive_phase_two_fraction": float(
+                np.mean(recovery.master.phase_two)
+            ),
+            "constitutive_minimum_switching_margin": float(
+                np.min(
+                    np.abs(
+                        recovery.master.relative_lorentz_factor
+                        - 1.0
+                        - recovery.master.phase_threshold
+                    )
+                )
+            )
+            if np.all(np.isfinite(recovery.master.phase_threshold))
+            else None,
+            "constitutive_variant_digest": (
+                self.constitutive_variant_digest or ""
+            ),
             "recovery_maximum_residual": recovery.report.maximum_residual,
             "recovery_failures": recovery.report.failed_cells,
             "damping_vector_energy_change": self.last_damping_report.vector_energy_change,

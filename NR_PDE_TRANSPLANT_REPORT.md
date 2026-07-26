@@ -81,10 +81,11 @@ design was rejected rather than hidden behind `KMP_DUPLICATE_LIB_OK`. The
 current bridge lowers the serialized networks to pure NumPy and avoids that
 runtime ambiguity.
 
-The frozen closure is available at the NR boundary but does not silently
-replace the analytic production master. Promotion into primitive recovery and
-the PDE RHS requires new recovery, conservation, convexity, characteristic,
-and continuum gates.
+The transplant milestone initially stopped at this ABI. The subsequent
+frozen-constitutive promotion now makes the invariant gradient selectable in
+primitive recovery and the PDE RHS while retaining analytic M1 as the
+control. The implementation and first nested-grid results are documented in
+`NEURAL_PDE_PROMOTION_REPORT.md`.
 
 ## Coupled smoke evolution
 
@@ -121,7 +122,7 @@ it is not a continuum strong-field claim.
 
 ## Regression evidence
 
-The transplanted NR suite contains 87 passing tests covering:
+The original transplanted NR suite contained 87 passing tests covering:
 
 - CCZ4 fixed points, projection, and fourth-order gauge-wave convergence;
 - GRHD primitive recovery, shocks, conservation, and second-order convergence;
@@ -138,21 +139,23 @@ The existing 27 constitutive/recurrence tests also continue to pass in a
 separate process. Separation is intentional on Windows because the PyTorch
 and NumPy test environments may load different OpenMP implementations.
 
-## Qualification boundary and next gate
+## Qualification boundary after promotion
 
-This milestone establishes a working, standalone NR reference backend. It
-does not yet establish:
+The learned invariant-gradient boundary has now been crossed. The production
+recovery, stress, canonical momentum, and RHS share the qualified frozen
+constitutive law, and an analytic/frozen 8/16/32 ladder passes conservation,
+entropy, switching, convexity, hyperbolicity, causality, and positive
+self-convergence gates.
 
-- frozen-master authority inside nonlinear primitive recovery;
-- continuum convergence of the new coupled smoke problem;
+This still does not establish:
+
+- constraint-converged strong-field continuum evolution;
 - nonlinear outer-boundary reflection bounds;
 - long strong-field or binary stability;
 - full-state moving-box AMR;
 - native Slang/Vulkan NR kernels;
 - or differentiable multi-step PDE adjoints.
 
-The next promotion milestone is to make the production recovery consume the
-frozen invariant gradient, compare every recovered conservative state against
-the analytic M1 control, and accept the frozen path only when conservation,
-entropy, KKT, Legendre, thermodynamic, characteristic, and continuum margins
-all pass.
+The next promotion milestone is a resolution-matched constrained initial-data
+ladder, followed by longer evolutions, higher-order interface reconstruction,
+independent-code comparison, and eventual Slang/Vulkan parity.

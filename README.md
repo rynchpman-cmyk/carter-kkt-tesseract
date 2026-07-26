@@ -172,6 +172,32 @@ The source boundary, state contract, validation evidence, and remaining
 promotion gates are recorded in the
 [NR PDE transplant report](NR_PDE_TRANSPLANT_REPORT.md).
 
+The qualified frozen invariant gradient can now drive both multifluid
+primitive recovery and the complete coupled RHS:
+
+```powershell
+.\run_tesseract_nr.ps1 `
+    -Points 8 `
+    -Steps 1 `
+    -Dt 1e-5 `
+    -Constitutive frozen
+```
+
+Compare the active learned phase against the analytic M1 control on a nested
+resolution ladder with:
+
+```powershell
+.\run_tesseract_nr_convergence.ps1 `
+    -Resolutions 8,16,32 `
+    -FinalTime 1e-5 `
+    -Output tesseract_nr_convergence_results.json
+```
+
+The recorded 8/16/32 ladder passes recovery, conservation, entropy,
+switching, Legendre, thermodynamic, hyperbolicity, causality, and
+self-convergence gates. Its scope and measurements are in the
+[neural PDE promotion report](NEURAL_PDE_PROMOTION_REPORT.md).
+
 ### Retrain the conditioned model
 
 ```powershell
@@ -243,6 +269,8 @@ For the exact environment and validation sequence, see
 | `tesseract_nr/` | Standalone CCZ4 + Theory 3.3 numerical-relativity backend |
 | `run_tesseract_nr.py` | Coupled NR smoke and checkpoint runner |
 | `run_tesseract_nr.ps1` | PowerShell entrypoint for the NR backend |
+| `run_tesseract_nr_convergence.py` | Analytic/frozen nested-grid study |
+| `tesseract_nr_convergence_results.json` | Recorded active-neural ladder |
 | `migrate_full_slang.py` | Deterministic GLSL-to-Slang migration and native kernels |
 | `progressive_full_unroll.py` | Piecewise BPTT, continuation, margins, and validation |
 | `train_lyapunov_conditioned.py` | Intrinsic attractor and Lyapunov curriculum |
@@ -265,6 +293,7 @@ artifacts contain everything needed to regenerate the tracked Slang modules.
 - [Theory 3.3 physical hybrid mode](docs/THEORY33_HYBRID.md)
 - [Theory 3.3 experiment report](THEORY33_EXPERIMENT_REPORT.md)
 - [Advanced frozen-constitutive report](THEORY33_ADVANCED_REPORT.md)
+- [Frozen neural PDE promotion report](NEURAL_PDE_PROMOTION_REPORT.md)
 - [Lyapunov conditioning](docs/LYAPUNOV_CONDITIONING.md)
 - [Visualization instrument](docs/VISUALIZATION.md)
 - [Reproducibility and validation](docs/REPRODUCIBILITY.md)

@@ -35,6 +35,7 @@ py-modules = [
     "migrate_full_slang",
     "progressive_full_unroll",
     "run_tesseract_nr",
+    "run_tesseract_nr_convergence",
     "run_theory33_experiments",
     "run_theory33_advanced",
     "run_theory33_hybrid",
