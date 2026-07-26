@@ -18,7 +18,7 @@ jobs:
         run: python -m compileall -q .
 
       - name: Validate portable artifacts
-        run: python -m unittest discover -s tests -v
+        run: python -m unittest tests.test_artifacts -v
 
       - name: Regenerate baseline Slang
         run: |
@@ -33,3 +33,41 @@ jobs:
             --model hybrid_model_conditioned.json \
             --output /tmp/carter_tesseract_conditioned.slang
           cmp carter_tesseract_conditioned.slang /tmp/carter_tesseract_conditioned.slang
+
+  theory33:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install runtime dependencies
+        run: python -m pip install "numpy>=2.3,<3"
+
+      - name: Install CPU PyTorch
+        run: >-
+          python -m pip install
+          torch==2.12.1
+          --index-url https://download.pytorch.org/whl/cpu
+
+      - name: Validate physical hybrid
+        run: >-
+          python -m unittest
+          tests.test_theory33_hybrid
+          tests.test_theory33_experiments
+          tests.test_theory33_advanced
+          -v
+
+      - name: Regenerate broad-basin controller
+        run: python fit_theory33_basin.py
+
+      - name: Run literal physical rollout
+        run: >-
+          python run_theory33_hybrid.py
+          --steps 128
+          --characteristic-stride 16
+          --basin-points 257
+          --basin-characteristic-points 17
+          --global-exponent-points 61

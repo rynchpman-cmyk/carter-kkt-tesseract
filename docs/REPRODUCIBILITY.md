@@ -74,7 +74,78 @@ python .\test_hybrid.py
 Checks finite recurrence loss, exact KKT feasibility, and a local derivative
 against centered finite differences.
 
-### 3. GLSL/PyTorch parity
+### 3. Theory 3.3 physical hybrid
+
+```powershell
+.\run_theory33_hybrid.ps1
+```
+
+Runs 128 literal steps with KKT, timelike-current, convexity, causal-cone,
+principal-symbol, and Lyapunov checks. It additionally evolves a 1,025-point
+initialization grid over `[-1, 1]` and samples both characteristic branches
+over the resulting enclosure. Finally, it sends signed log-spaced inputs
+through magnitude `1e300` through the global absorbing gate and verifies
+finite evolution, zero outer sensitivity, and physical validity. This tier is
+CPU-only.
+
+Regenerate and verify the compact controller coefficients with:
+
+```powershell
+python .\fit_theory33_basin.py
+```
+
+Run the isolated nonsmooth and neural-constitutive experiment ladder with:
+
+```powershell
+.\run_theory33_experiments.ps1 `
+    -Output .\theory33_experiment_results.json
+```
+
+The full run trains all experimental modules and then applies the same
+128-step basin, physical, characteristic, and global-safety gates. Use
+`-Quick` for a shorter development fit with unchanged acceptance audits.
+Measurements and limitations are documented in
+[the experiment report](../THEORY33_EXPERIMENT_REPORT.md).
+
+Generate the independent kinetic EOS, transport, and noisy phase tables:
+
+```powershell
+python .\generate_theory33_kinetic_data.py `
+    --output-directory .\data
+```
+
+Run the full frozen-constitutive qualification:
+
+```powershell
+.\run_theory33_advanced.ps1
+```
+
+This trains from the frozen tables, uses held-out trajectories, bootstraps
+phase uncertainty, compares multi-step event-gradient estimators, continues
+the Carter scale against explicit margins, writes
+`theory33_frozen_variants.json`, and then replays the artifact without
+fitting. Use `-Quick` for development resolution.
+
+Export only the qualified artifact and validate it on Vulkan:
+
+```powershell
+.\run_theory33_frozen_slang.ps1
+```
+
+See the
+[advanced qualification report](../THEORY33_ADVANCED_REPORT.md) for hashes,
+acceptance thresholds, results, and limitations.
+
+### 4. Theory 3.3 native Slang closure
+
+```powershell
+.\run_theory33_slang.ps1
+```
+
+Checks the analytic M1 constitutive values and native reverse gradient against
+an independent float32 implementation on Vulkan.
+
+### 5. GLSL/PyTorch parity
 
 ```powershell
 python .\compare_backends.py --steps 2
@@ -82,7 +153,7 @@ python .\compare_backends.py --steps 2
 
 Checks recurrence values, active sets, and classifier masks.
 
-### 4. Native Slang reverse
+### 6. Native Slang reverse
 
 ```powershell
 .\run_full_slang.ps1
@@ -91,7 +162,7 @@ Checks recurrence values, active sets, and classifier masks.
 Checks compact/full primal equality, nonzero adjoints, all 1,287 weights, and
 finite-difference agreement.
 
-### 5. Progressive full physics
+### 7. Progressive full physics
 
 ```powershell
 .\run_progressive_full.ps1
@@ -99,7 +170,7 @@ finite-difference agreement.
 
 Runs continuation horizons and whole-trajectory BPTT audits.
 
-### 6. Conditioned literal milestone
+### 8. Conditioned literal milestone
 
 ```powershell
 .\run_conditioned_literal.ps1
