@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Interactive Vulkan-backed visualization of the Carter/KKT recurrence."""
+"""Render Tesseract's full stack or interactive Vulkan literal recurrence."""
 
 from __future__ import annotations
 
@@ -10,7 +10,8 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-import slangpy as spy
+
+spy: Any | None = None
 
 
 HERE = Path(__file__).resolve().parent
@@ -614,13 +615,38 @@ class Dashboard:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--mode",
+        choices=("full-stack", "literal"),
+        default="full-stack",
+        help=(
+            "render the qualified NR/constitutive stack or the original "
+            "interactive Vulkan literal-recurrence instrument"
+        ),
+    )
     parser.add_argument("--samples", type=int, default=320)
     parser.add_argument("--steps", type=int, default=64)
     parser.add_argument("--domain", type=float, nargs=2, default=(-1.0, 1.0))
     parser.add_argument(
         "--output",
         type=Path,
-        default=HERE / "tesseract_conditioning_atlas.png",
+        help="snapshot path; defaults depend on --mode",
+    )
+    parser.add_argument(
+        "--frontier-results",
+        type=Path,
+        default=HERE / "tesseract_nr_frontier_results.json",
+    )
+    parser.add_argument(
+        "--artifact",
+        type=Path,
+        default=HERE / "theory33_frozen_variants.json",
+    )
+    parser.add_argument("--spacetime-points", type=int, default=24)
+    parser.add_argument(
+        "--skip-live-spacetime",
+        action="store_true",
+        help="render the tracked qualified profile without rebuilding CMC data",
     )
     parser.add_argument(
         "--no-show",
@@ -631,9 +657,43 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> int:
+    global spy
     args = parse_args()
+    if args.mode == "full-stack":
+        from tesseract_full_stack_visualizer import (
+            render_full_stack_dashboard,
+        )
+
+        output = (
+            args.output
+            if args.output is not None
+            else HERE / "tesseract_full_stack_dashboard.png"
+        )
+        path = render_full_stack_dashboard(
+            args.frontier_results,
+            output.resolve(),
+            artifact_path=args.artifact,
+            spacetime_points=args.spacetime_points,
+            live_spacetime=not args.skip_live_spacetime,
+            show=not args.no_show,
+        )
+        print(f"saved full-stack visualization: {path}", flush=True)
+        return 0
+
     if args.samples < 32 or args.steps < 1:
         raise SystemExit("--samples must be >=32 and --steps must be positive")
+    try:
+        import slangpy as slang_runtime
+    except ImportError:
+        raise SystemExit(
+            "literal mode requires slangpy; run through run_visualization.ps1"
+        )
+    spy = slang_runtime
+    output = (
+        args.output
+        if args.output is not None
+        else HERE / "tesseract_conditioning_atlas.png"
+    )
     device = spy.create_device(
         type=spy.DeviceType.vulkan,
         include_paths=[HERE],
@@ -673,7 +733,7 @@ def main() -> int:
     Dashboard(
         atlases,
         steps=args.steps,
-        output=args.output.resolve(),
+        output=output.resolve(),
         show=not args.no_show,
     ).run()
     return 0

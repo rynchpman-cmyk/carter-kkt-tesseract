@@ -3,7 +3,7 @@
 **A hard-constrained, differentiable Vulkan simulator that grew out of the
 operation \(a \oplus b=\tfrac32(a+b)\).**
 
-![Carter/KKT literal dynamics dashboard](tesseract_conditioning_atlas.png)
+![Tesseract active neural spacetime dashboard](tesseract_full_stack_dashboard.png)
 
 The project combines a parity-gated scalar recurrence, an exact 81-candidate
 box-KKT solve, Carter-style multifluid constitutive structure, a learned scalar
@@ -79,7 +79,8 @@ flowchart LR
 - A self-contained Theory 3.3 mode with future-timelike currents, an analytic
   M1 master, physical admissibility gates, and a differentiated
   characteristic audit.
-- A four-panel Vulkan-backed phase-space and tesseract visualization.
+- A full-stack neural-spacetime observatory plus the original interactive
+  Vulkan phase-space and tesseract instrument.
 
 ## Quick start
 
@@ -91,9 +92,19 @@ The project currently targets Windows PowerShell with a Vulkan-capable GPU.
 .\run_visualization.ps1
 ```
 
-Use the controls to switch between the explosive baseline and conditioned
-model, scrub recurrence time, animate the projected tesseract, and save a
-snapshot.
+The default view rebuilds a live qualified 24x24 frozen-neural CMC slice and
+connects it to the tracked WENO, continuum, 128-step horizon, and 3D
+qualification evidence. Use `-Fast` to render directly from the recorded
+artifact without rebuilding the slice.
+
+Open the original interactive Vulkan recurrence microscope with:
+
+```powershell
+.\run_visualization.ps1 -Mode literal
+```
+
+That view can switch between the explosive baseline and conditioned model,
+scrub recurrence time, animate the projected tesseract, and save a snapshot.
 
 ### Conditioned literal recurrence
 
@@ -306,7 +317,9 @@ For the exact environment and validation sequence, see
 | `migrate_full_slang.py` | Deterministic GLSL-to-Slang migration and native kernels |
 | `progressive_full_unroll.py` | Piecewise BPTT, continuation, margins, and validation |
 | `train_lyapunov_conditioned.py` | Intrinsic attractor and Lyapunov curriculum |
-| `visualize_tesseract.py` | Vulkan-backed interactive dynamics instrument |
+| `visualize_tesseract.py` | Full-stack and Vulkan literal visualization entrypoint |
+| `tesseract_full_stack_visualizer.py` | Qualified neural-spacetime dashboard renderer |
+| `tesseract_full_stack_dashboard.png` | README full-stack qualification dashboard |
 | `hybrid_model*.json` | Portable model weights, dynamics, and audit metadata |
 | `carter_tesseract*.slang` | Generated baseline and conditioned Slang modules |
 | `test_*.py` | PyTorch, Slang AD, recurrence, and backend validation |

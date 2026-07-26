@@ -1,9 +1,14 @@
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
 
 import numpy as np
 
+from tesseract_full_stack_visualizer import (
+    build_artifact_spacetime_slice,
+    load_frontier_results,
+)
 from tesseract_nr.constrained_convergence import balanced_active_counterflow
 from tesseract_nr.frontier import _nested_restrict, reconstruction_accuracy
 from tesseract_nr.frozen_closure import QualifiedFrozenClosure
@@ -13,6 +18,17 @@ from tesseract_nr.production33 import Theory33ProductionSolver
 
 
 class NeuralSpacetimeFrontierTests(unittest.TestCase):
+    def test_visualizer_loads_the_qualified_full_stack_artifact(self) -> None:
+        root = Path(__file__).resolve().parents[2]
+        results = load_frontier_results(
+            root / "tesseract_nr_frontier_results.json"
+        )
+        spacetime = build_artifact_spacetime_slice(results, points=32)
+        self.assertEqual(spacetime.hamiltonian.shape, (32, 32))
+        self.assertEqual(spacetime.carrier_velocity.shape, (3, 32, 32))
+        self.assertTrue(bool(np.all(spacetime.phase_two)))
+        self.assertFalse(spacetime.live)
+
     def test_weno_z_interface_is_fifth_order_on_smooth_advection(self) -> None:
         report = reconstruction_accuracy((16, 32, 64, 128))
         self.assertTrue(all(report["qualification"].values()))

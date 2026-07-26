@@ -102,6 +102,8 @@ class ArtifactTests(unittest.TestCase):
             "theory33_frozen_variants.json",
             "theory33_qualified_frozen.slang",
             "tesseract_conditioning_atlas.png",
+            "tesseract_full_stack_dashboard.png",
+            "tesseract_full_stack_visualizer.py",
             "docs/THEORY33_HYBRID.md",
             "theory33_hybrid.slang",
         )

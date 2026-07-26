@@ -13,8 +13,8 @@ explains the final system from the inside out.
    mixed-direction neural reverse, and piecewise BPTT.
 5. [Lyapunov conditioning](LYAPUNOV_CONDITIONING.md) — why the baseline
    explodes and how the scale-1 attractor is trained.
-6. [Visualization](VISUALIZATION.md) — the basin atlas, cobweb, KKT phase map,
-   and 4D Carter projection.
+6. [Visualization](VISUALIZATION.md) — the full-stack neural-spacetime
+   observatory, basin atlas, KKT phase map, and 4D Carter projection.
 7. [Reproducibility](REPRODUCIBILITY.md) — environments, commands, generated
    artifacts, and validation tiers.
 8. [Publishing](PUBLISHING.md) — recommended GitHub metadata and publication
