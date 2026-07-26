@@ -9,6 +9,7 @@ __pycache__/
 *.pyc
 *.pyo
 *.log
+/tesseract_nr_smoke.npz
 *.egg-info/
 build/
 dist/

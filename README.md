@@ -8,7 +8,8 @@ operation \(a \oplus b=\tfrac32(a+b)\).**
 The project combines a parity-gated scalar recurrence, an exact 81-candidate
 box-KKT solve, Carter-style multifluid constitutive structure, a learned scalar
 master function \(\Lambda_\phi\), reverse-mode differentiation through time,
-and intrinsic Lyapunov conditioning.
+intrinsic Lyapunov conditioning, and a standalone coupled
+CCZ4/GRHD/two-current numerical-relativity PDE backend.
 
 The conditioned literal map has been validated for **128 undamped Vulkan
 steps** with:
@@ -154,6 +155,23 @@ that frozen result on Vulkan with:
 See the
 [advanced qualification report](THEORY33_ADVANCED_REPORT.md).
 
+### Numerical-relativity PDE solver
+
+Run the standalone float64 coupled Theory 3.3 reference backend with:
+
+```powershell
+.\run_tesseract_nr.ps1 -Points 16 -Steps 4 -Dt 1e-5
+```
+
+It evolves 52 scalar components per cell across CCZ4 geometry and gauge,
+conservative relativistic matter, Carter baryon/carrier currents, and mixed
+massive-vector fields. The runner reports conservation, recovery, entropy,
+Gauss, convexity, and spacetime-constraint diagnostics. See
+[the NR PDE solver guide](docs/NR_PDE_SOLVER.md).
+The source boundary, state contract, validation evidence, and remaining
+promotion gates are recorded in the
+[NR PDE transplant report](NR_PDE_TRANSPLANT_REPORT.md).
+
 ### Retrain the conditioned model
 
 ```powershell
@@ -222,6 +240,9 @@ For the exact environment and validation sequence, see
 | `theory33_advanced.py` | Frozen replay, PSD mobility, event BPTT, and margin continuation |
 | `theory33_frozen_variants.json` | Qualified replayable constitutive weights and evidence |
 | `theory33_qualified_frozen.slang` | Generated qualified frozen Vulkan module |
+| `tesseract_nr/` | Standalone CCZ4 + Theory 3.3 numerical-relativity backend |
+| `run_tesseract_nr.py` | Coupled NR smoke and checkpoint runner |
+| `run_tesseract_nr.ps1` | PowerShell entrypoint for the NR backend |
 | `migrate_full_slang.py` | Deterministic GLSL-to-Slang migration and native kernels |
 | `progressive_full_unroll.py` | Piecewise BPTT, continuation, margins, and validation |
 | `train_lyapunov_conditioned.py` | Intrinsic attractor and Lyapunov curriculum |

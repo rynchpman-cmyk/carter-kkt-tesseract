@@ -4,7 +4,8 @@ title: "Carter/KKT Tesseract"
 abstract: >-
   A hard-constrained differentiable Carter/KKT Vulkan simulator evolved from
   a parity-gated scalar recurrence, with piecewise-constant hard decisions,
-  progressive full-physics unrolling, and Lyapunov-conditioned dynamics.
+  progressive full-physics unrolling, Lyapunov-conditioned dynamics, and a
+  coupled CCZ4 two-current numerical-relativity PDE reference backend.
 type: software
 authors:
   - name: "rynchpman-cmyk"
@@ -20,5 +21,8 @@ keywords:
   - dynamical systems
   - KKT conditions
   - Lyapunov conditioning
+  - numerical relativity
+  - CCZ4
+  - relativistic multifluid dynamics
   - Slang
   - Vulkan

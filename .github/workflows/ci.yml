@@ -71,3 +71,29 @@ jobs:
           --basin-points 257
           --basin-characteristic-points 17
           --global-exponent-points 61
+
+  nr:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install NR runtime dependencies
+        run: python -m pip install "numpy>=2.3,<3"
+
+      - name: Validate Tesseract NR backend
+        run: >-
+          python -m unittest discover
+          -s tests/nr
+          -p "test_*.py"
+          -v
+
+      - name: Run coupled NR smoke evolution
+        run: >-
+          python run_tesseract_nr.py
+          --points 8
+          --steps 1
+          --dt 1e-5
