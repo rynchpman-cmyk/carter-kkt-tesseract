@@ -46,6 +46,7 @@ class Theory33RecoveryReport:
     maximum_relative_lorentz_factor: float
     minimum_legendre_eigenvalue: float
     minimum_thermodynamic_eigenvalue: float
+    phase_crossings: int
 
 
 @dataclass(frozen=True)
@@ -105,6 +106,8 @@ class Theory33ProductionSolver(Theory3ProductionSolver):
         self.last_carrier_boundary_number_outflow = 0.0
         self.last_carrier_number_change = 0.0
         self.last_carrier_number_balance_residual = 0.0
+        self.last_phase_crossings = 0
+        self.last_stage_positivity_fallbacks = 0
 
     def _entropy_internal(self, density: float, entropy: float) -> float:
         p = self.master_parameters
@@ -206,7 +209,7 @@ class Theory33ProductionSolver(Theory3ProductionSolver):
         energy: Array,
         P_D: Array,
         entropy_per_baryon: Array,
-    ) -> tuple[FluidPrimitive, CarrierPrimitive, Array, int]:
+    ) -> tuple[FluidPrimitive, CarrierPrimitive, Array, int, int]:
         shape = self.grid.shape
         count = int(np.prod(shape))
         h_flat = h.reshape(3, 3, count)
@@ -223,6 +226,7 @@ class Theory33ProductionSolver(Theory3ProductionSolver):
         solved = np.empty((8, count), dtype=float)
         residuals = np.empty(count, dtype=float)
         failed = 0
+        phase_crossings = 0
         for cell in range(count):
             target = np.concatenate(
                 (
@@ -267,48 +271,64 @@ class Theory33ProductionSolver(Theory3ProductionSolver):
                 h_flat[:, :, cell],
                 float(entropy_flat[cell]),
             )
-            function = lambda value: self._cell_predictions(
-                value,
-                h_flat[:, :, cell],
-                float(sqrt_flat[cell]),
-                float(entropy_flat[cell]),
-                phase_override,
-            )
-            best = np.inf
-            for _ in range(self.production_parameters.recovery_iterations):
-                prediction = function(x)
-                residual = (prediction - target) / scale
-                norm = float(np.max(np.abs(residual)))
-                best = min(best, norm)
-                if norm < max(self.production_parameters.recovery_tolerance, 2.0e-8):
-                    break
-                jac = self._cell_jacobian(function, x) / scale[:, None]
-                delta = np.linalg.lstsq(jac, -residual, rcond=1.0e-12)[0]
-                accepted = False
-                for power in range(10):
-                    trial = x + delta * (0.5**power)
-                    trial[0] = np.clip(trial[0], -700.0, 700.0)
-                    trial[4] = np.clip(trial[4], -700.0, 700.0)
-                    trial_residual = (function(trial) - target) / scale
-                    if np.max(np.abs(trial_residual)) < norm:
-                        x = trial
-                        accepted = True
+            final = np.inf
+            for transition in range(
+                self.production_parameters.phase_transition_iterations + 1
+            ):
+                function = lambda value: self._cell_predictions(
+                    value,
+                    h_flat[:, :, cell],
+                    float(sqrt_flat[cell]),
+                    float(entropy_flat[cell]),
+                    phase_override,
+                )
+                for _ in range(
+                    self.production_parameters.recovery_iterations
+                ):
+                    prediction = function(x)
+                    residual = (prediction - target) / scale
+                    norm = float(np.max(np.abs(residual)))
+                    if norm < max(
+                        self.production_parameters.recovery_tolerance,
+                        2.0e-8,
+                    ):
                         break
-                if not accepted:
+                    jac = self._cell_jacobian(function, x) / scale[:, None]
+                    delta = np.linalg.lstsq(
+                        jac, -residual, rcond=1.0e-12
+                    )[0]
+                    accepted = False
+                    for power in range(10):
+                        trial = x + delta * (0.5**power)
+                        trial[0] = np.clip(trial[0], -700.0, 700.0)
+                        trial[4] = np.clip(trial[4], -700.0, 700.0)
+                        trial_residual = (function(trial) - target) / scale
+                        if np.max(np.abs(trial_residual)) < norm:
+                            x = trial
+                            accepted = True
+                            break
+                    if not accepted:
+                        break
+                final = float(
+                    np.max(np.abs((function(x) - target) / scale))
+                )
+                final_phase = self._cell_phase(
+                    x,
+                    h_flat[:, :, cell],
+                    float(entropy_flat[cell]),
+                )
+                if phase_override is None or final_phase == phase_override:
                     break
-            final = float(np.max(np.abs((function(x) - target) / scale)))
+                phase_crossings += 1
+                if (
+                    transition
+                    >= self.production_parameters.phase_transition_iterations
+                ):
+                    failed += 1
+                    break
+                phase_override = final_phase
             residuals[cell] = final
             if not np.isfinite(final) or final > 2.0e-6:
-                failed += 1
-            final_phase = self._cell_phase(
-                x,
-                h_flat[:, :, cell],
-                float(entropy_flat[cell]),
-            )
-            if (
-                phase_override is not None
-                and final_phase != phase_override
-            ):
                 failed += 1
             solved[:, cell] = x
 
@@ -327,7 +347,13 @@ class Theory33ProductionSolver(Theory3ProductionSolver):
         sigma = np.zeros(shape)
         fluid = FluidPrimitive(n, internal, velocity_N, sigma)
         carrier = CarrierPrimitive(d, velocity_D)
-        return fluid, carrier, residuals.reshape(shape), failed
+        return (
+            fluid,
+            carrier,
+            residuals.reshape(shape),
+            failed,
+            phase_crossings,
+        )
 
     def _recover_cells_from_energy(
         self,
@@ -338,7 +364,7 @@ class Theory33ProductionSolver(Theory3ProductionSolver):
         energy: Array,
         P_D: Array,
         entropy_guess: Array,
-    ) -> tuple[FluidPrimitive, CarrierPrimitive, Array, Array, int]:
+    ) -> tuple[FluidPrimitive, CarrierPrimitive, Array, Array, int, int]:
         """Invert the nine independent material conserved variables.
 
         The production state also transports entropy.  At finite resolution
@@ -364,6 +390,7 @@ class Theory33ProductionSolver(Theory3ProductionSolver):
         solved = np.empty((9, count), dtype=float)
         residuals = np.empty(count, dtype=float)
         failed = 0
+        phase_crossings = 0
         for cell in range(count):
             target = np.concatenate(
                 (
@@ -437,57 +464,78 @@ class Theory33ProductionSolver(Theory3ProductionSolver):
                 float(x[1]),
             )
 
-            def function(value: np.ndarray) -> np.ndarray:
-                primitive = np.concatenate(
-                    (
-                        [value[0]],
-                        value[2:5],
-                        [value[5]],
-                        value[6:9],
+            final = np.inf
+            for transition in range(
+                self.production_parameters.phase_transition_iterations + 1
+            ):
+                def function(value: np.ndarray) -> np.ndarray:
+                    primitive = np.concatenate(
+                        (
+                            [value[0]],
+                            value[2:5],
+                            [value[5]],
+                            value[6:9],
+                        )
                     )
-                )
-                return self._cell_predictions(
-                    primitive,
-                    h_flat[:, :, cell],
-                    float(sqrt_flat[cell]),
-                    float(value[1]),
-                    phase_override,
-                )
+                    return self._cell_predictions(
+                        primitive,
+                        h_flat[:, :, cell],
+                        float(sqrt_flat[cell]),
+                        float(value[1]),
+                        phase_override,
+                    )
 
-            for _ in range(self.production_parameters.recovery_iterations):
-                residual = (function(x) - target) / scale
-                norm = float(np.max(np.abs(residual)))
-                if norm < max(self.production_parameters.recovery_tolerance, 2.0e-9):
-                    break
-                jac = self._cell_jacobian(function, x) / scale[:, None]
-                delta = np.linalg.solve(jac, -residual)
-                accepted = False
-                for power in range(12):
-                    trial = x + delta * (0.5**power)
-                    trial[0] = np.clip(trial[0], -700.0, 700.0)
-                    trial[5] = np.clip(trial[5], -700.0, 700.0)
-                    if np.max(np.abs((function(trial) - target) / scale)) < norm:
-                        x = trial
-                        accepted = True
+                for _ in range(
+                    self.production_parameters.recovery_iterations
+                ):
+                    residual = (function(x) - target) / scale
+                    norm = float(np.max(np.abs(residual)))
+                    if norm < max(
+                        self.production_parameters.recovery_tolerance,
+                        2.0e-9,
+                    ):
                         break
-                if not accepted:
+                    jac = self._cell_jacobian(function, x) / scale[:, None]
+                    delta = np.linalg.solve(jac, -residual)
+                    accepted = False
+                    for power in range(12):
+                        trial = x + delta * (0.5**power)
+                        trial[0] = np.clip(trial[0], -700.0, 700.0)
+                        trial[5] = np.clip(trial[5], -700.0, 700.0)
+                        if (
+                            np.max(
+                                np.abs((function(trial) - target) / scale)
+                            )
+                            < norm
+                        ):
+                            x = trial
+                            accepted = True
+                            break
+                    if not accepted:
+                        break
+                final = float(
+                    np.max(np.abs((function(x) - target) / scale))
+                )
+                primitive_final = np.concatenate(
+                    ([x[0]], x[2:5], [x[5]], x[6:9])
+                )
+                final_phase = self._cell_phase(
+                    primitive_final,
+                    h_flat[:, :, cell],
+                    float(x[1]),
+                )
+                if phase_override is None or final_phase == phase_override:
                     break
-            final = float(np.max(np.abs((function(x) - target) / scale)))
+                phase_crossings += 1
+                if (
+                    transition
+                    >= self.production_parameters.phase_transition_iterations
+                ):
+                    failed += 1
+                    break
+                phase_override = final_phase
             residuals[cell] = final
             if not np.isfinite(final) or final > 2.0e-7:
-                failed += 1
-            primitive_final = np.concatenate(
-                ([x[0]], x[2:5], [x[5]], x[6:9])
-            )
-            final_phase = self._cell_phase(
-                primitive_final,
-                h_flat[:, :, cell],
-                float(x[1]),
-            )
-            if (
-                phase_override is not None
-                and final_phase != phase_override
-            ):
                 failed += 1
             solved[:, cell] = x
 
@@ -524,6 +572,7 @@ class Theory33ProductionSolver(Theory3ProductionSolver):
             entropy,
             residuals.reshape(shape),
             failed,
+            phase_crossings,
         )
 
     def _project_to_master_manifold(
@@ -546,7 +595,14 @@ class Theory33ProductionSolver(Theory3ProductionSolver):
         entropy_guess = state.matter.entropy / np.maximum(
             state.matter.D, 1.0e-300
         )
-        fluid, carrier, entropy, residual, failed = self._recover_cells_from_energy(
+        (
+            fluid,
+            carrier,
+            entropy,
+            residual,
+            failed,
+            phase_crossings,
+        ) = self._recover_cells_from_energy(
             h,
             state.matter.D,
             state.target_charge / self.master_parameters.carrier_charge,
@@ -555,6 +611,7 @@ class Theory33ProductionSolver(Theory3ProductionSolver):
             state.target_current,
             entropy_guess,
         )
+        self.last_phase_crossings = phase_crossings
         if failed:
             raise FloatingPointError(
                 "Theory 3.3 energy-manifold projection failed: "
@@ -689,7 +746,7 @@ class Theory33ProductionSolver(Theory3ProductionSolver):
         material_momentum = state.matter.momentum / sqrt_h[None, ...] - vector_stress.momentum
         D_D = state.target_charge / self.master_parameters.carrier_charge
         entropy_per_baryon = state.matter.entropy / np.maximum(state.matter.D, 1.0e-300)
-        fluid, carrier, residual, failed = self._recover_cells(
+        fluid, carrier, residual, failed, phase_crossings = self._recover_cells(
             h,
             state.matter.D,
             D_D,
@@ -698,6 +755,7 @@ class Theory33ProductionSolver(Theory3ProductionSolver):
             state.target_current,
             entropy_per_baryon,
         )
+        self.last_phase_crossings = phase_crossings
         fluid = FluidPrimitive(
             fluid.baryon_density,
             fluid.specific_internal_energy,
@@ -738,6 +796,7 @@ class Theory33ProductionSolver(Theory3ProductionSolver):
             float(np.max(master.relative_lorentz_factor)),
             float(np.min(legendre_min)),
             float(np.min(thermo_min)),
+            phase_crossings,
         )
         if failed:
             raise FloatingPointError(
@@ -812,6 +871,45 @@ class Theory33ProductionSolver(Theory3ProductionSolver):
             + coefficient_left * (field - field_left)
         ) / (2.0 * self.grid.spacing[axis])
 
+    def _carrier_characteristic_basis(
+        self,
+        recovery: Theory33Recovery,
+        axis: int,
+    ) -> tuple[Array, Array]:
+        """Frozen Carter charge/canonical-momentum characteristic basis."""
+        size = 4
+        right = np.zeros((size, size) + self.grid.shape)
+        for component in range(size):
+            right[component, component] = 1.0
+        normal_index = 1 + axis
+        sound = np.full(
+            self.grid.shape,
+            np.clip(
+                self.master_parameters.carrier_sound_speed,
+                1.0e-4,
+                1.0 - 1.0e-10,
+            ),
+        )
+        impedance = 0.5 * (
+            np.abs(recovery.master.B_D)
+            + np.abs(self._roll(recovery.master.B_D, -1, axis))
+        )
+        impedance = np.clip(impedance, 1.0e-6, 1.0e6)
+        wave_scale = impedance * sound
+        norm = np.sqrt(1.0 + wave_scale**2)
+        right[:, [0, normal_index]] = 0.0
+        right[0, 0] = 1.0 / norm
+        right[normal_index, 0] = -wave_scale / norm
+        right[0, normal_index] = 1.0 / norm
+        right[normal_index, normal_index] = wave_scale / norm
+        batch = np.moveaxis(right, (0, 1), (-2, -1))
+        inverse = np.linalg.inv(batch)
+        self.last_characteristic_condition_number = max(
+            self.last_characteristic_condition_number,
+            float(np.max(np.linalg.cond(batch))),
+        )
+        return right, np.moveaxis(inverse, (-2, -1), (0, 1))
+
     def _target_rhs(self, state, recovery, h, K):
         del K
         lapse = state.geometry.lapse
@@ -825,8 +923,58 @@ class Theory33ProductionSolver(Theory3ProductionSolver):
             flux_charge = state.target_charge * transport_D[axis]
             flux_momentum = state.target_current * transport_D[axis]
             speed = self._speed_bound(recovery, h, lapse, shift, axis)
-            charge_interface = self._rusanov_interface(flux_charge, state.target_charge, speed, axis)
-            momentum_interface = self._rusanov_interface(flux_momentum, state.target_current, speed, axis)
+            if (
+                self.production_parameters.flux_reconstruction
+                == "characteristic_weno5_z"
+                and getattr(self.grid, "is_periodic", True)
+                and not self._force_first_order
+            ):
+                conserved_block = np.concatenate(
+                    (
+                        state.target_charge[None, ...],
+                        state.target_current,
+                    ),
+                    axis=0,
+                )
+                flux_block = np.concatenate(
+                    (flux_charge[None, ...], flux_momentum), axis=0
+                )
+                right_basis, left_basis = self._carrier_characteristic_basis(
+                    recovery, axis
+                )
+                high_interface = self._characteristic_weno_interface(
+                    flux_block,
+                    conserved_block,
+                    speed,
+                    axis,
+                    right_basis,
+                    left_basis,
+                )
+                low_interface = self._piecewise_rusanov_interface(
+                    flux_block, conserved_block, speed, axis
+                )
+                charge_floor = (
+                    sqrt_h
+                    * self.master_parameters.carrier_floor
+                    * self.master_parameters.carrier_charge
+                    * self.production_parameters.positivity_floor_factor
+                )
+                interface = self._positivity_blend_interfaces(
+                    high_interface,
+                    low_interface,
+                    conserved_block,
+                    axis,
+                    charge_floor,
+                )
+                charge_interface = interface[0]
+                momentum_interface = interface[1:4]
+            else:
+                charge_interface = self._rusanov_interface(
+                    flux_charge, state.target_charge, speed, axis
+                )
+                momentum_interface = self._rusanov_interface(
+                    flux_momentum, state.target_current, speed, axis
+                )
             if getattr(self.grid, "is_periodic", True):
                 dcharge += self._interface_divergence(charge_interface, axis)
                 dmomentum += self._interface_divergence(momentum_interface, axis)
@@ -1041,67 +1189,84 @@ class Theory33ProductionSolver(Theory3ProductionSolver):
                 float(x[1]),
             )
 
-            def function(value: np.ndarray) -> np.ndarray:
-                primitive = np.concatenate(
-                    (
-                        [value[0]],
-                        value[2:5],
-                        [value[5]],
-                        value[6:9],
+            final = np.inf
+            for transition in range(
+                self.production_parameters.phase_transition_iterations + 1
+            ):
+                def function(value: np.ndarray) -> np.ndarray:
+                    primitive = np.concatenate(
+                        (
+                            [value[0]],
+                            value[2:5],
+                            [value[5]],
+                            value[6:9],
+                        )
                     )
-                )
-                conservative = self._cell_predictions(
-                    primitive,
-                    h_flat[:, :, cell],
-                    float(sqrt_flat[cell]),
-                    float(value[1]),
-                    phase_override,
-                )
-                return np.concatenate(
-                    (
-                        conservative[:6],
-                        value[6:9] - value[2:5],
+                    conservative = self._cell_predictions(
+                        primitive,
+                        h_flat[:, :, cell],
+                        float(sqrt_flat[cell]),
+                        float(value[1]),
+                        phase_override,
                     )
-                )
+                    return np.concatenate(
+                        (
+                            conservative[:6],
+                            value[6:9] - value[2:5],
+                        )
+                    )
 
-            for _ in range(self.production_parameters.recovery_iterations):
-                residual = (function(x) - target) / scale
-                norm = float(np.max(np.abs(residual)))
-                if norm < 2.0e-9:
-                    break
-                jac = self._cell_jacobian(function, x) / scale[:, None]
-                delta = np.linalg.solve(jac, -residual)
-                accepted = False
-                for power in range(12):
-                    trial = x + delta * (0.5**power)
-                    trial[0] = np.clip(trial[0], -700.0, 700.0)
-                    trial[5] = np.clip(trial[5], -700.0, 700.0)
-                    if np.max(np.abs((function(trial) - target) / scale)) < norm:
-                        x = trial
-                        accepted = True
+                for _ in range(
+                    self.production_parameters.recovery_iterations
+                ):
+                    residual = (function(x) - target) / scale
+                    norm = float(np.max(np.abs(residual)))
+                    if norm < 2.0e-9:
                         break
-                if not accepted:
+                    jac = self._cell_jacobian(function, x) / scale[:, None]
+                    delta = np.linalg.solve(jac, -residual)
+                    accepted = False
+                    for power in range(12):
+                        trial = x + delta * (0.5**power)
+                        trial[0] = np.clip(trial[0], -700.0, 700.0)
+                        trial[5] = np.clip(trial[5], -700.0, 700.0)
+                        if (
+                            np.max(
+                                np.abs((function(trial) - target) / scale)
+                            )
+                            < norm
+                        ):
+                            x = trial
+                            accepted = True
+                            break
+                    if not accepted:
+                        break
+                final = float(
+                    np.max(np.abs((function(x) - target) / scale))
+                )
+                primitive_final = np.concatenate(
+                    ([x[0]], x[2:5], [x[5]], x[6:9])
+                )
+                final_phase = self._cell_phase(
+                    primitive_final,
+                    h_flat[:, :, cell],
+                    float(x[1]),
+                )
+                if phase_override is None or final_phase == phase_override:
                     break
-            final = float(np.max(np.abs((function(x) - target) / scale)))
+                self.last_phase_crossings += 1
+                if (
+                    transition
+                    >= self.production_parameters.phase_transition_iterations
+                ):
+                    raise FloatingPointError(
+                        "Theory 3.3 implicit drag branch update did not "
+                        f"settle in cell {cell}"
+                    )
+                phase_override = final_phase
             if not np.isfinite(final) or final > 2.0e-7:
                 raise FloatingPointError(
                     f"Theory 3.3 implicit drag solve failed in cell {cell}: {final:.3e}"
-                )
-            primitive_final = np.concatenate(
-                ([x[0]], x[2:5], [x[5]], x[6:9])
-            )
-            final_phase = self._cell_phase(
-                primitive_final,
-                h_flat[:, :, cell],
-                float(x[1]),
-            )
-            if (
-                phase_override is not None
-                and final_phase != phase_override
-            ):
-                raise FloatingPointError(
-                    "Theory 3.3 implicit drag solve crossed the frozen "
-                    f"constitutive branch in cell {cell}"
                 )
             entropy_increase[cell] = x[1] - old_entropy[cell]
             if entropy_increase[cell] < -2.0e-9:
@@ -1182,11 +1347,25 @@ class Theory33ProductionSolver(Theory3ProductionSolver):
     def step(
         self, state: Theory3ProductionState, dt: float
     ) -> Theory3ProductionState:
+        """Advance one projected split step and always release stage context."""
+        try:
+            return self._step_with_active_reconstruction(state, dt)
+        finally:
+            self._active_stage_dt = None
+
+    def _step_with_active_reconstruction(
+        self, state: Theory3ProductionState, dt: float
+    ) -> Theory3ProductionState:
         if dt <= 0.0:
             raise ValueError("dt must be positive")
         entropy_before_step = float(self.grid.integrate(state.matter.entropy))
         self.last_projection_entropy_change = 0.0
         self.last_projection_minimum_change = 0.0
+        self.last_positivity_limited_faces = 0
+        self.last_minimum_positivity_theta = 1.0
+        self.last_characteristic_condition_number = 1.0
+        self.last_stage_positivity_fallbacks = 0
+        self._active_stage_dt = dt
         strang = self.production_parameters.source_splitting == "strang"
         if strang:
             split_state = self._apply_carrier_drag(state, 0.5 * dt)
@@ -1208,14 +1387,31 @@ class Theory33ProductionSolver(Theory3ProductionSolver):
             factor: float,
             stage_time: float,
         ) -> tuple[Array, ...]:
-            candidate = self._unpack(
-                tuple(y + factor * dt * k for y, k in zip(base, slope)),
-                stage_time,
-            )
-            candidate.geometry = self.ccz4.project_algebraic(candidate.geometry)
-            candidate.geometry.time = stage_time
-            candidate = self._project_to_master_manifold(candidate)
-            return self._pack(candidate)
+            stage_factor = factor
+            for attempt in range(10):
+                candidate = self._unpack(
+                    tuple(
+                        y + stage_factor * dt * k
+                        for y, k in zip(base, slope)
+                    ),
+                    stage_time,
+                )
+                candidate.geometry = self.ccz4.project_algebraic(
+                    candidate.geometry
+                )
+                candidate.geometry.time = stage_time
+                try:
+                    candidate = self._project_to_master_manifold(candidate)
+                    return self._pack(candidate)
+                except FloatingPointError:
+                    if (
+                        not self.production_parameters.positivity_preserving
+                        or attempt == 9
+                    ):
+                        raise
+                    stage_factor *= 0.5
+                    self.last_stage_positivity_fallbacks += 1
+            raise AssertionError("unreachable positivity stage loop")
 
         # Classical RK4 with a constitutive projection at every internal
         # stage.  The projection changes only redundant entropy; all variables
@@ -1239,10 +1435,26 @@ class Theory33ProductionSolver(Theory3ProductionSolver):
             y + (dt / 6.0) * (a + 2.0 * b + 2.0 * c + d)
             for y, a, b, c, d in zip(values, k1, k2, k3, k4)
         )
-        result = self._unpack(evolved, time + dt)
-        result.geometry = self.ccz4.project_algebraic(result.geometry)
-        result.geometry.time = result.time
-        result = self._project_to_master_manifold(result)
+        final_theta = 1.0
+        for attempt in range(10):
+            final_values = tuple(
+                old + final_theta * (new - old)
+                for old, new in zip(values, evolved)
+            )
+            result = self._unpack(final_values, time + dt)
+            result.geometry = self.ccz4.project_algebraic(result.geometry)
+            result.geometry.time = result.time
+            try:
+                result = self._project_to_master_manifold(result)
+                break
+            except FloatingPointError:
+                if (
+                    not self.production_parameters.positivity_preserving
+                    or attempt == 9
+                ):
+                    raise
+                final_theta *= 0.5
+                self.last_stage_positivity_fallbacks += 1
         result = self._apply_carrier_drag(
             result, 0.5 * dt if strang else dt
         )
@@ -1295,10 +1507,12 @@ class Theory33ProductionSolver(Theory3ProductionSolver):
             getattr(self.grid, "is_periodic", True)
             and self.last_step_entropy_change < -1.0e-10
         ):
+            self._active_stage_dt = None
             raise FloatingPointError(
                 "Theory 3.3 projected finite-volume step decreased total entropy: "
                 f"delta={self.last_step_entropy_change:.3e}"
             )
+        self._active_stage_dt = None
         return result
 
     def _apply_damping(self, state: Theory3ProductionState, dt: float) -> Theory3ProductionState:
@@ -1435,6 +1649,13 @@ class Theory33ProductionSolver(Theory3ProductionSolver):
             ),
             "recovery_maximum_residual": recovery.report.maximum_residual,
             "recovery_failures": recovery.report.failed_cells,
+            "recovery_phase_crossings": recovery.report.phase_crossings,
+            "positivity_limited_faces": self.last_positivity_limited_faces,
+            "minimum_positivity_theta": self.last_minimum_positivity_theta,
+            "stage_positivity_fallbacks": self.last_stage_positivity_fallbacks,
+            "characteristic_condition_number": (
+                self.last_characteristic_condition_number
+            ),
             "damping_vector_energy_change": self.last_damping_report.vector_energy_change,
             "damping_heat": self.last_damping_report.irreversible_heat,
             "damping_gauss_change": self.last_damping_report.maximum_gauss_change,

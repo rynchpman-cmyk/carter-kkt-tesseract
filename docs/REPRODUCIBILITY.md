@@ -199,6 +199,20 @@ analytic and frozen models for 128 steps, measures the 2D
 constraint/evolution smoke. The tracked JSON is the machine-readable
 qualification record.
 
+### 10. Characteristic shocks and hard phase crossings
+
+```powershell
+.\run_tesseract_nr_shocks.ps1
+```
+
+This CPU campaign runs a 2D characteristic-WENO rarefaction-corner
+falsification control, qualifies conservative material/carrier positivity
+limiting, forces outer hard-branch recovery updates, and evolves a
+checkerboard Carter interface through the learned phase threshold. The
+tracked record is `tesseract_nr_shock_results.json`; numerical scope and
+limitations are in
+[the characteristic shock frontier report](../CHARACTERISTIC_SHOCK_FRONTIER_REPORT.md).
+
 ## Retraining
 
 ```powershell

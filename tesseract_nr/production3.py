@@ -35,6 +35,9 @@ class Theory3ProductionParameters:
     flux_reconstruction: str = "piecewise_constant"
     reconstruction_theta: float = 1.5
     source_splitting: str = "lie"
+    positivity_preserving: bool = False
+    positivity_floor_factor: float = 1.001
+    phase_transition_iterations: int = 2
 
     def __post_init__(self) -> None:
         if self.recovery_tolerance <= 0.0 or self.recovery_iterations < 20:
@@ -47,15 +50,20 @@ class Theory3ProductionParameters:
             "piecewise_constant",
             "muscl_mc",
             "weno5_z",
+            "characteristic_weno5_z",
         }:
             raise ValueError(
                 "flux_reconstruction must be piecewise_constant, muscl_mc, "
-                "or weno5_z"
+                "weno5_z, or characteristic_weno5_z"
             )
         if not 1.0 <= self.reconstruction_theta <= 2.0:
             raise ValueError("reconstruction_theta must lie in [1, 2]")
         if self.source_splitting not in {"lie", "strang"}:
             raise ValueError("source_splitting must be lie or strang")
+        if self.positivity_floor_factor < 1.0:
+            raise ValueError("positivity_floor_factor must be at least one")
+        if self.phase_transition_iterations < 1:
+            raise ValueError("phase_transition_iterations must be positive")
 
 
 @dataclass
@@ -149,6 +157,11 @@ class Theory3ProductionSolver:
             raise ValueError("Theory 3 and GRHD gamma_ad must agree")
         self.system = Theory3System(grid, self.theory_parameters)
         self.last_damping_report = FiniteDampingReport()
+        self._active_stage_dt: float | None = None
+        self._force_first_order = False
+        self.last_positivity_limited_faces = 0
+        self.last_minimum_positivity_theta = 1.0
+        self.last_characteristic_condition_number = 1.0
 
     @property
     def gamma_ad(self) -> float:
@@ -481,6 +494,10 @@ class Theory3ProductionSolver:
     def _rusanov_interface(
         self, flux: Array, conserved: Array, speed: Array, axis: int
     ) -> Array:
+        if self._force_first_order:
+            return self._piecewise_rusanov_interface(
+                flux, conserved, speed, axis
+            )
         neighbor_flux = self._roll(flux, -1, axis)
         neighbor_state = self._roll(conserved, -1, axis)
         face_speed = np.maximum(speed, self._roll(speed, -1, axis))
@@ -513,6 +530,208 @@ class Theory3ProductionSolver:
         return 0.5 * (left_flux + right_flux) - 0.5 * face_speed * (
             right_state - left_state
         )
+
+    def _piecewise_rusanov_interface(
+        self, flux: Array, conserved: Array, speed: Array, axis: int
+    ) -> Array:
+        """First-order local Lax--Friedrichs control flux."""
+        neighbor_flux = self._roll(flux, -1, axis)
+        neighbor_state = self._roll(conserved, -1, axis)
+        face_speed = np.maximum(speed, self._roll(speed, -1, axis))
+        component_axes = conserved.ndim - self.grid.ndim
+        face_speed = face_speed.reshape(
+            (1,) * component_axes + self.grid.shape
+        )
+        return 0.5 * (flux + neighbor_flux) - 0.5 * face_speed * (
+            neighbor_state - conserved
+        )
+
+    @staticmethod
+    def _apply_characteristic_matrix(matrix: Array, field: Array) -> Array:
+        return np.einsum("ab...,b...->a...", matrix, field)
+
+    def _characteristic_weno_interface(
+        self,
+        flux: Array,
+        conserved: Array,
+        speed: Array,
+        axis: int,
+        right_basis: Array,
+        left_basis: Array,
+    ) -> Array:
+        """Reconstruct a locally split flux in one frozen face basis.
+
+        The eigensystem is frozen at each face.  Every member of the WENO
+        stencil is projected through that same left basis, which avoids the
+        componentwise mixing of waves at shocks and material interfaces.
+        """
+        face_speed = np.maximum(speed, self._roll(speed, -1, axis))
+
+        def split(offset: int, sign: float) -> Array:
+            value = self._roll(flux, offset, axis) + sign * face_speed[
+                None, ...
+            ] * self._roll(conserved, offset, axis)
+            return self._apply_characteristic_matrix(left_basis, value)
+
+        plus = self._weno5_z_combine(
+            split(2, 1.0),
+            split(1, 1.0),
+            split(0, 1.0),
+            split(-1, 1.0),
+            split(-2, 1.0),
+        )
+        minus = self._weno5_z_combine(
+            split(-3, -1.0),
+            split(-2, -1.0),
+            split(-1, -1.0),
+            split(0, -1.0),
+            split(1, -1.0),
+        )
+        return 0.5 * self._apply_characteristic_matrix(
+            right_basis, plus + minus
+        )
+
+    def _matter_characteristic_basis(
+        self,
+        state: Theory3ProductionState,
+        recovery: Theory3Recovery,
+        axis: int,
+    ) -> tuple[Array, Array]:
+        """Return an audited frozen acoustic/contact basis for the 7-field block."""
+        size = 7
+        right = np.zeros((size, size) + self.grid.shape)
+        for component in range(size):
+            right[component, component] = 1.0
+        sound = 0.5 * (
+            recovery.sound_speed
+            + self._roll(recovery.sound_speed, -1, axis)
+        )
+        sound = np.clip(sound, 1.0e-4, 1.0 - 1.0e-10)
+        enthalpy_scale = np.clip(
+            0.5
+            * (
+                state.matter.energy
+                / np.maximum(np.abs(state.matter.D), 1.0e-300)
+                + self._roll(state.matter.energy, -1, axis)
+                / np.maximum(
+                    np.abs(self._roll(state.matter.D, -1, axis)),
+                    1.0e-300,
+                )
+            ),
+            1.0e-3,
+            1.0e3,
+        )
+        density_index = 0
+        momentum_index = 1 + axis
+        energy_index = 4
+        right[:, [density_index, momentum_index, energy_index]] = 0.0
+        right[density_index, density_index] = 1.0
+        norm = np.sqrt(1.0 + sound**2 + enthalpy_scale**2)
+        right[density_index, momentum_index] = 1.0 / norm
+        right[momentum_index, momentum_index] = -sound / norm
+        right[energy_index, momentum_index] = enthalpy_scale / norm
+        right[density_index, energy_index] = 1.0 / norm
+        right[momentum_index, energy_index] = sound / norm
+        right[energy_index, energy_index] = enthalpy_scale / norm
+        batch = np.moveaxis(right, (0, 1), (-2, -1))
+        inverse = np.linalg.inv(batch)
+        condition = np.linalg.cond(batch)
+        self.last_characteristic_condition_number = max(
+            self.last_characteristic_condition_number,
+            float(np.max(condition)),
+        )
+        left = np.moveaxis(inverse, (-2, -1), (0, 1))
+        return right, left
+
+    def _positivity_blend_interfaces(
+        self,
+        high: Array,
+        low: Array,
+        conserved: Array,
+        axis: int,
+        density_floor: Array,
+        *,
+        metric_inverse: Array | None = None,
+        energy_index: int | None = None,
+        momentum_slice: slice | None = None,
+        energy_floor: Array | None = None,
+    ) -> Array:
+        """Conservatively blend troubled faces back to the monotone flux.
+
+        A cell coefficient is computed from a forward-Euler admissibility
+        test.  Taking the minimum coefficient on both sides of each face
+        preserves conservation while enforcing the density floor and, for
+        the material block, a dominant-energy interior proxy.
+        """
+        if (
+            not self.production_parameters.positivity_preserving
+            or self._active_stage_dt is None
+            or not getattr(self.grid, "is_periodic", True)
+        ):
+            return high
+        effective_dt = (
+            self._active_stage_dt * max(self.grid.ndim, 1)
+        )
+        low_state = conserved + effective_dt * self._interface_divergence(
+            low, axis
+        )
+        high_state = conserved + effective_dt * self._interface_divergence(
+            high, axis
+        )
+        low_density = low_state[0]
+        high_density = high_state[0]
+        theta = np.ones(self.grid.shape)
+        troubled = high_density < density_floor
+        density_denominator = low_density - high_density
+        density_theta = np.clip(
+            (low_density - density_floor)
+            / np.maximum(density_denominator, 1.0e-300),
+            0.0,
+            1.0,
+        )
+        theta = np.where(troubled, density_theta, theta)
+
+        if (
+            metric_inverse is not None
+            and energy_index is not None
+            and momentum_slice is not None
+            and energy_floor is not None
+        ):
+            delta = high_state - low_state
+
+            def admissibility(value: Array) -> Array:
+                momentum = value[momentum_slice]
+                momentum_sq = np.einsum(
+                    "ij...,i...,j...->...",
+                    metric_inverse,
+                    momentum,
+                    momentum,
+                )
+                causal_norm = np.sqrt(
+                    np.maximum(value[0] ** 2 + momentum_sq, 0.0)
+                )
+                return value[energy_index] - causal_norm - energy_floor
+
+            high_gap = admissibility(high_state)
+            energy_troubled = high_gap < 0.0
+            lower = np.zeros(self.grid.shape)
+            upper = np.array(theta, copy=True)
+            for _ in range(18):
+                middle = 0.5 * (lower + upper)
+                trial = low_state + middle[None, ...] * delta
+                admissible = admissibility(trial) >= 0.0
+                lower = np.where(admissible, middle, lower)
+                upper = np.where(admissible, upper, middle)
+            theta = np.where(energy_troubled, lower, theta)
+
+        face_theta = np.minimum(theta, self._roll(theta, -1, axis))
+        limited = face_theta < 1.0 - 1.0e-13
+        self.last_positivity_limited_faces += int(np.count_nonzero(limited))
+        self.last_minimum_positivity_theta = min(
+            self.last_minimum_positivity_theta,
+            float(np.min(face_theta)),
+        )
+        return low + face_theta[None, ...] * (high - low)
 
     @staticmethod
     def _minmod(*values: Array) -> Array:
@@ -852,6 +1071,77 @@ class Theory3ProductionSolver:
             flux_entropy = state.matter.entropy * transport[axis]
             flux_tracer = state.matter.tracer * transport[axis]
             speed = self._speed_bound(recovery, h, lapse, shift, axis)
+            if (
+                self.production_parameters.flux_reconstruction
+                == "characteristic_weno5_z"
+                and getattr(self.grid, "is_periodic", True)
+                and not self._force_first_order
+            ):
+                conserved_block = np.concatenate(
+                    (
+                        state.matter.D[None, ...],
+                        state.matter.momentum,
+                        state.matter.energy[None, ...],
+                        state.matter.entropy[None, ...],
+                        state.matter.tracer[None, ...],
+                    ),
+                    axis=0,
+                )
+                flux_block = np.concatenate(
+                    (
+                        flux_D[None, ...],
+                        flux_momentum,
+                        flux_energy[None, ...],
+                        flux_entropy[None, ...],
+                        flux_tracer[None, ...],
+                    ),
+                    axis=0,
+                )
+                right_basis, left_basis = self._matter_characteristic_basis(
+                    state, recovery, axis
+                )
+                high_interface = self._characteristic_weno_interface(
+                    flux_block,
+                    conserved_block,
+                    speed,
+                    axis,
+                    right_basis,
+                    left_basis,
+                )
+                low_interface = self._piecewise_rusanov_interface(
+                    flux_block, conserved_block, speed, axis
+                )
+                density_floor = (
+                    sqrt_h
+                    * self.grhd.parameters.density_floor
+                    * self.production_parameters.positivity_floor_factor
+                )
+                energy_floor = (
+                    sqrt_h
+                    * self.grhd.parameters.density_floor
+                    * self.grhd.parameters.internal_energy_floor
+                    * self.production_parameters.positivity_floor_factor
+                )
+                interface = self._positivity_blend_interfaces(
+                    high_interface,
+                    low_interface,
+                    conserved_block,
+                    axis,
+                    density_floor,
+                    metric_inverse=h_inv,
+                    energy_index=4,
+                    momentum_slice=slice(1, 4),
+                    energy_floor=energy_floor,
+                )
+                block_derivative = self._interface_divergence(
+                    interface, axis
+                )
+                derivatives[0] += block_derivative[0]
+                derivatives[1] += block_derivative[1:4]
+                derivatives[2] += block_derivative[4]
+                derivatives[3] += block_derivative[5]
+                derivatives[4] += block_derivative[6]
+                continue
             for derivative, flux, conserved in zip(
                 derivatives,
                 (
@@ -936,12 +1226,64 @@ class Theory3ProductionSolver:
                 c * state.target_charge + d * state.target_current[axis]
             )
             speed = self._speed_bound(recovery, h, lapse, shift, axis)
-            charge_interface = self._rusanov_interface(
-                flux_charge, state.target_charge, speed, axis
-            )
-            current_interface = self._rusanov_interface(
-                flux_current, state.target_current, speed, axis
-            )
+            if (
+                self.production_parameters.flux_reconstruction
+                == "characteristic_weno5_z"
+                and getattr(self.grid, "is_periodic", True)
+                and not self._force_first_order
+            ):
+                conserved_block = np.concatenate(
+                    (
+                        state.target_charge[None, ...],
+                        state.target_current,
+                    ),
+                    axis=0,
+                )
+                flux_block = np.concatenate(
+                    (flux_charge[None, ...], flux_current), axis=0
+                )
+                matrix = np.zeros((4, 4) + self.grid.shape)
+                matrix[0, 0] = a
+                matrix[0, 1 + axis] = b
+                matrix[1 + axis, 0] = c
+                matrix[1 + axis, 1 + axis] = d
+                for component in range(3):
+                    if component != axis:
+                        matrix[1 + component, 1 + component] = a
+                face_matrix = 0.5 * (
+                    matrix + self._roll(matrix, -1, axis)
+                )
+                batch = np.moveaxis(face_matrix, (0, 1), (-2, -1))
+                _, eigenvectors = np.linalg.eig(batch)
+                right_basis = np.moveaxis(
+                    np.real(eigenvectors), (-2, -1), (0, 1)
+                )
+                left_basis = np.moveaxis(
+                    np.linalg.inv(np.real(eigenvectors)),
+                    (-2, -1),
+                    (0, 1),
+                )
+                self.last_characteristic_condition_number = max(
+                    self.last_characteristic_condition_number,
+                    float(np.max(np.linalg.cond(np.real(eigenvectors)))),
+                )
+                interface = self._characteristic_weno_interface(
+                    flux_block,
+                    conserved_block,
+                    speed,
+                    axis,
+                    right_basis,
+                    left_basis,
+                )
+                charge_interface = interface[0]
+                current_interface = interface[1:4]
+            else:
+                charge_interface = self._rusanov_interface(
+                    flux_charge, state.target_charge, speed, axis
+                )
+                current_interface = self._rusanov_interface(
+                    flux_current, state.target_current, speed, axis
+                )
             if getattr(self.grid, "is_periodic", True):
                 dcharge += self._interface_divergence(
                     charge_interface, axis
@@ -1209,7 +1551,16 @@ class Theory3ProductionSolver:
     ) -> Theory3ProductionState:
         if dt <= 0.0:
             raise ValueError("dt must be positive")
-        evolved = rk4_arrays(self._pack(state), state.time, dt, self.rhs)
+        self.last_positivity_limited_faces = 0
+        self.last_minimum_positivity_theta = 1.0
+        self.last_characteristic_condition_number = 1.0
+        self._active_stage_dt = dt
+        try:
+            evolved = rk4_arrays(
+                self._pack(state), state.time, dt, self.rhs
+            )
+        finally:
+            self._active_stage_dt = None
         result = self._unpack(evolved, state.time + dt)
         result.geometry = self.ccz4.project_algebraic(result.geometry)
         result.geometry.time = result.time
