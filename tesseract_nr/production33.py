@@ -108,6 +108,14 @@ class Theory33ProductionSolver(Theory3ProductionSolver):
         self.last_carrier_number_balance_residual = 0.0
         self.last_phase_crossings = 0
         self.last_stage_positivity_fallbacks = 0
+        self.last_characteristic_maximum_imaginary_part = 0.0
+        self.last_characteristic_maximum_speed = 0.0
+        self.last_characteristic_maximum_physical_speed = 0.0
+        self.last_characteristic_minimum_separation = np.inf
+        self.last_characteristic_maximum_eigenpair_residual = 0.0
+        self._full_carter_target_rhs_cache: tuple[
+            Array, Array
+        ] | None = None
 
     def _entropy_internal(self, density: float, entropy: float) -> float:
         p = self.master_parameters
@@ -871,6 +879,722 @@ class Theory33ProductionSolver(Theory3ProductionSolver):
             + coefficient_left * (field - field_left)
         ) / (2.0 * self.grid.spacing[axis])
 
+    def _carter_principal_fields(
+        self,
+        primitive: Array,
+        h: Array,
+        lapse: Array,
+        shift: Array,
+        axis: int,
+        phase_override: Array | bool | None,
+    ) -> tuple[Array, Array, Array, Array, Array]:
+        """Evaluate the literal nine-field Carter principal subsystem.
+
+        The conserved order is ``(D_N,D_D,S_i,E,P_i^D)``.  The returned path
+        coefficient multiplies derivatives of ``chi_0`` and ``chi_axis`` in
+        the canonical-momentum equation.  Hard constitutive decisions are
+        supplied by the caller and remain fixed during numerical
+        differentiation.
+        """
+        _, _, sqrt_h = inverse_metric(h)
+        h_inv = inverse_metric(h)[0]
+        n = np.exp(np.clip(primitive[0], -700.0, 700.0))
+        q_N = primitive[1:4]
+        d = np.exp(np.clip(primitive[4], -700.0, 700.0))
+        q_D = primitive[5:8]
+        entropy = primitive[8]
+        W_N = np.sqrt(
+            1.0 + np.einsum("ij...,i...,j...->...", h, q_N, q_N)
+        )
+        W_D = np.sqrt(
+            1.0 + np.einsum("ij...,i...,j...->...", h, q_D, q_D)
+        )
+        velocity_N = q_N / W_N[None, ...]
+        velocity_D = q_D / W_D[None, ...]
+        velocity_N_down = np.einsum(
+            "ij...,j...->i...", h, velocity_N
+        )
+        velocity_D_down = np.einsum(
+            "ij...,j...->i...", h, velocity_D
+        )
+        relative_gamma = np.maximum(
+            W_N * W_D
+            - np.einsum("ij...,i...,j...->...", h, q_N, q_D),
+            1.0,
+        )
+        cross = n * d * relative_gamma
+        lambda_mf, gradient, _, _, _ = self.master.invariant_response(
+            n**2,
+            d**2,
+            cross,
+            entropy,
+            phase_override=phase_override,
+        )
+        B_N = -2.0 * gradient[..., 0]
+        B_D = -2.0 * gradient[..., 1]
+        entrainment = -gradient[..., 2]
+        pressure = (
+            lambda_mf
+            + B_N * n**2
+            + B_D * d**2
+            + 2.0 * entrainment * cross
+        )
+        nW = n * W_N
+        dW = d * W_D
+        energy = (
+            -pressure
+            + B_N * nW**2
+            + B_D * dW**2
+            + 2.0 * entrainment * nW * dW
+        )
+        momentum = (
+            B_N[None, ...]
+            * nW[None, ...] ** 2
+            * velocity_N_down
+            + B_D[None, ...]
+            * dW[None, ...] ** 2
+            * velocity_D_down
+            + entrainment[None, ...]
+            * nW[None, ...]
+            * dW[None, ...]
+            * (velocity_N_down + velocity_D_down)
+        )
+        stress = pressure[None, None, ...] * h
+        stress += (
+            B_N[None, None, ...]
+            * nW[None, None, ...] ** 2
+            * velocity_N_down[:, None, ...]
+            * velocity_N_down[None, :, ...]
+        )
+        stress += (
+            B_D[None, None, ...]
+            * dW[None, None, ...] ** 2
+            * velocity_D_down[:, None, ...]
+            * velocity_D_down[None, :, ...]
+        )
+        stress += (
+            entrainment[None, None, ...]
+            * nW[None, None, ...]
+            * dW[None, None, ...]
+            * (
+                velocity_N_down[:, None, ...]
+                * velocity_D_down[None, :, ...]
+                + velocity_D_down[:, None, ...]
+                * velocity_N_down[None, :, ...]
+            )
+        )
+        stress_mixed = np.einsum(
+            "ik...,kj...->ij...", h_inv, stress
+        )
+        momentum_up = np.einsum(
+            "ij...,j...->i...", h_inv, momentum
+        )
+        chi_down = (
+            B_D[None, ...] * dW[None, ...] * velocity_D_down
+            + entrainment[None, ...]
+            * nW[None, ...]
+            * velocity_N_down
+        )
+        chi_normal = B_D * dW + entrainment * nW
+        chi_zero = -lapse * chi_normal + np.einsum(
+            "i...,i...->...", shift, chi_down
+        )
+        D_N = sqrt_h * nW
+        D_D = sqrt_h * dW
+        P_D = D_D[None, ...] * chi_down
+        conserved = np.concatenate(
+            (
+                D_N[None, ...],
+                D_D[None, ...],
+                (sqrt_h[None, ...] * momentum),
+                (sqrt_h * energy)[None, ...],
+                P_D,
+            ),
+            axis=0,
+        )
+        transport_N = lapse[None, ...] * velocity_N - shift
+        transport_D = lapse[None, ...] * velocity_D - shift
+        flux = np.concatenate(
+            (
+                (D_N * transport_N[axis])[None, ...],
+                (D_D * transport_D[axis])[None, ...],
+                (
+                    sqrt_h[None, ...]
+                    * (
+                        lapse[None, ...] * stress_mixed[axis]
+                        - shift[axis][None, ...] * momentum
+                    )
+                ),
+                (
+                    sqrt_h
+                    * (
+                        lapse * momentum_up[axis]
+                        - shift[axis] * energy
+                    )
+                )[None, ...],
+                P_D * transport_D[axis],
+            ),
+            axis=0,
+        )
+        return (
+            conserved,
+            flux,
+            chi_zero,
+            chi_down[axis],
+            sqrt_h * dW,
+        )
+
+    def _full_carter_symbol(
+        self,
+        recovery: Theory33Recovery,
+        h: Array,
+        lapse: Array,
+        shift: Array,
+        axis: int,
+    ) -> tuple[Array, Array, Array, Array]:
+        """Numerically form ``dF/dU-B_rhs`` on one frozen hard branch."""
+        W_N = lorentz_factor(h, recovery.fluid.velocity)
+        W_D = lorentz_factor(h, recovery.carrier.velocity)
+        primitive = np.concatenate(
+            (
+                np.log(recovery.fluid.baryon_density)[None, ...],
+                W_N[None, ...] * recovery.fluid.velocity,
+                np.log(recovery.carrier.number_density)[None, ...],
+                W_D[None, ...] * recovery.carrier.velocity,
+                recovery.entropy_per_baryon[None, ...],
+            ),
+            axis=0,
+        )
+        phase = recovery.master.phase_two
+        base = self._carter_principal_fields(
+            primitive, h, lapse, shift, axis, phase
+        )
+        time_jacobian = np.empty((9, 9) + self.grid.shape)
+        flux_jacobian = np.empty_like(time_jacobian)
+        chi_zero_jacobian = np.empty((9,) + self.grid.shape)
+        chi_axis_jacobian = np.empty_like(chi_zero_jacobian)
+        for column in range(9):
+            step = 2.0e-6 * np.maximum(
+                1.0, np.abs(primitive[column])
+            )
+            plus = np.array(primitive, copy=True)
+            minus = np.array(primitive, copy=True)
+            plus[column] += step
+            minus[column] -= step
+            plus_fields = self._carter_principal_fields(
+                plus, h, lapse, shift, axis, phase
+            )
+            minus_fields = self._carter_principal_fields(
+                minus, h, lapse, shift, axis, phase
+            )
+            denominator = 2.0 * step
+            time_jacobian[:, column] = (
+                plus_fields[0] - minus_fields[0]
+            ) / denominator[None, ...]
+            flux_jacobian[:, column] = (
+                plus_fields[1] - minus_fields[1]
+            ) / denominator[None, ...]
+            chi_zero_jacobian[column] = (
+                plus_fields[2] - minus_fields[2]
+            ) / denominator
+            chi_axis_jacobian[column] = (
+                plus_fields[3] - minus_fields[3]
+            ) / denominator
+        transport_D = (
+            lapse * recovery.carrier.velocity[axis] - shift[axis]
+        )
+        path_primitive = np.zeros_like(time_jacobian)
+        path_primitive[6 + axis] = -base[4][None, ...] * (
+            chi_zero_jacobian
+            + transport_D[None, ...] * chi_axis_jacobian
+        )
+        time_batch = np.moveaxis(
+            time_jacobian, (0, 1), (-2, -1)
+        )
+        flux_batch = np.moveaxis(
+            flux_jacobian + path_primitive,
+            (0, 1),
+            (-2, -1),
+        )
+        inverse_time = np.linalg.inv(time_batch)
+        symbol_batch = flux_batch @ inverse_time
+        path_batch = (
+            np.moveaxis(path_primitive, (0, 1), (-2, -1))
+            @ inverse_time
+        )
+        symbol = np.moveaxis(symbol_batch, (-2, -1), (0, 1))
+        path_symbol = np.moveaxis(
+            path_batch, (-2, -1), (0, 1)
+        )
+        return symbol, path_symbol, time_jacobian, primitive
+
+    def _full_carter_characteristic_basis(
+        self,
+        state: Theory3ProductionState,
+        recovery: Theory33Recovery,
+        h: Array,
+        axis: int,
+    ) -> tuple[Array, Array, Array, Array]:
+        """Return the complete numerical 9+2 Carter eigensystem at faces."""
+        lapse = state.geometry.lapse
+        shift = state.geometry.shift
+        symbol, path_symbol, time_jacobian, primitive = (
+            self._full_carter_symbol(
+                recovery, h, lapse, shift, axis
+            )
+        )
+        neighbor_symbol = self._roll(symbol, -1, axis)
+        physical_values = np.linalg.eigvals(
+            np.moveaxis(symbol, (0, 1), (-2, -1))
+        )
+        self.last_characteristic_maximum_physical_speed = max(
+            self.last_characteristic_maximum_physical_speed,
+            float(np.max(np.abs(physical_values.real))),
+        )
+        face_symbol = 0.5 * (symbol + neighbor_symbol)
+        crossing = (
+            recovery.master.phase_two
+            != self._roll(recovery.master.phase_two, -1, axis)
+        )
+        cell_batch = np.moveaxis(symbol, (0, 1), (-2, -1))
+        neighbor_batch = np.moveaxis(
+            neighbor_symbol, (0, 1), (-2, -1)
+        )
+        average_batch = np.moveaxis(
+            face_symbol, (0, 1), (-2, -1)
+        )
+        _, cell_vectors = np.linalg.eig(cell_batch)
+        _, neighbor_vectors = np.linalg.eig(neighbor_batch)
+        _, average_vectors = np.linalg.eig(average_batch)
+        cell_condition = np.linalg.cond(cell_vectors)
+        neighbor_condition = np.linalg.cond(neighbor_vectors)
+        average_condition = np.linalg.cond(average_vectors)
+        use_physical_side = crossing | (
+            average_condition
+            > 0.01
+            * self.master_parameters.characteristic_condition_limit
+        )
+        if np.any(use_physical_side):
+            use_cell = cell_condition <= neighbor_condition
+            selected = np.where(
+                use_cell[None, None, ...],
+                symbol,
+                neighbor_symbol,
+            )
+            face_symbol = np.where(
+                use_physical_side[None, None, ...],
+                selected,
+                face_symbol,
+            )
+        face_path = 0.5 * (
+            path_symbol + self._roll(path_symbol, -1, axis)
+        )
+        batch = np.moveaxis(face_symbol, (0, 1), (-2, -1))
+        eigenvalues, eigenvectors = np.linalg.eig(batch)
+        imaginary = float(np.max(np.abs(eigenvalues.imag)))
+        self.last_characteristic_maximum_imaginary_part = max(
+            self.last_characteristic_maximum_imaginary_part, imaginary
+        )
+        if imaginary > 2.0e-6:
+            raise FloatingPointError(
+                "full Carter symbol is not strongly hyperbolic: "
+                f"maximum imaginary speed={imaginary:.3e}"
+            )
+        order = np.argsort(eigenvalues.real, axis=-1)
+        eigenvalues = np.take_along_axis(
+            eigenvalues.real, order, axis=-1
+        )
+        eigenvectors = np.take_along_axis(
+            eigenvectors.real,
+            order[..., None, :],
+            axis=-1,
+        )
+        flat_matrix = batch.reshape((-1, 9, 9))
+        flat_values = eigenvalues.reshape((-1, 9))
+        flat_vectors = eigenvectors.reshape((-1, 9, 9))
+        identity9 = np.eye(9)
+        for point in range(flat_values.shape[0]):
+            values_at_point = flat_values[point]
+            start = 0
+            tolerance = 2.0e-6 * max(
+                1.0, float(np.max(np.abs(values_at_point)))
+            )
+            while start < 9:
+                stop = start + 1
+                while (
+                    stop < 9
+                    and abs(
+                        values_at_point[stop]
+                        - values_at_point[stop - 1]
+                    )
+                    <= tolerance
+                ):
+                    stop += 1
+                multiplicity = stop - start
+                if multiplicity > 1:
+                    center = float(
+                        np.mean(values_at_point[start:stop])
+                    )
+                    _, _, right_singular = np.linalg.svd(
+                        flat_matrix[point] - center * identity9
+                    )
+                    flat_vectors[
+                        point, :, start:stop
+                    ] = right_singular[-multiplicity:].T
+                start = stop
+        eigenvectors = flat_vectors.reshape(eigenvectors.shape)
+        norm = np.linalg.norm(eigenvectors, axis=-2)
+        eigenvectors /= np.maximum(norm[..., None, :], 1.0e-300)
+        largest = np.argmax(np.abs(eigenvectors), axis=-2)
+        pivot = np.take_along_axis(
+            eigenvectors, largest[..., None, :], axis=-2
+        ).squeeze(-2)
+        eigenvectors *= np.where(
+            pivot < 0.0, -1.0, 1.0
+        )[..., None, :]
+        eigenpair_residual = float(
+            np.max(
+                np.abs(
+                    batch @ eigenvectors
+                    - eigenvectors * eigenvalues[..., None, :]
+                )
+            )
+        )
+        self.last_characteristic_maximum_eigenpair_residual = max(
+            self.last_characteristic_maximum_eigenpair_residual,
+            eigenpair_residual,
+        )
+        if eigenpair_residual > 2.0e-5:
+            raise FloatingPointError(
+                "full Carter degenerate eigenspace residual is too large: "
+                f"residual={eigenpair_residual:.3e}"
+            )
+        physical_condition = np.linalg.cond(eigenvectors)
+        maximum_condition = float(np.max(physical_condition))
+        if (
+            not np.isfinite(maximum_condition)
+            or maximum_condition
+            >= self.master_parameters.characteristic_condition_limit
+        ):
+            raise FloatingPointError(
+                "full Carter eigenvectors are ill-conditioned: "
+                f"condition={maximum_condition:.3e}"
+            )
+        sorted_gap = np.diff(eigenvalues, axis=-1)
+        self.last_characteristic_minimum_separation = min(
+            self.last_characteristic_minimum_separation,
+            float(np.min(np.abs(sorted_gap))),
+        )
+        self.last_characteristic_maximum_speed = max(
+            self.last_characteristic_maximum_speed,
+            float(np.max(np.abs(eigenvalues))),
+        )
+        right_physical = np.moveaxis(
+            eigenvectors, (-2, -1), (0, 1)
+        )
+        face_time = 0.5 * (
+            time_jacobian
+            + self._roll(time_jacobian, -1, axis)
+        )
+        inverse_face_time = np.linalg.inv(
+            np.moveaxis(face_time, (0, 1), (-2, -1))
+        )
+        primitive_modes = np.moveaxis(
+            inverse_face_time
+            @ np.moveaxis(
+                right_physical, (0, 1), (-2, -1)
+            ),
+            (-2, -1),
+            (0, 1),
+        )
+        _, _, sqrt_h = inverse_metric(h)
+        W_N = lorentz_factor(h, recovery.fluid.velocity)
+        D_N = sqrt_h * recovery.fluid.baryon_density * W_N
+        q_N = primitive[1:4]
+        hq_N = np.einsum("ij...,j...->i...", h, q_N)
+        entropy_jacobian = np.zeros((9,) + self.grid.shape)
+        entropy_jacobian[0] = (
+            recovery.entropy_per_baryon * D_N
+        )
+        entropy_jacobian[1:4] = (
+            recovery.entropy_per_baryon[None, ...]
+            * D_N[None, ...]
+            * hq_N
+            / np.maximum(W_N[None, ...] ** 2, 1.0e-300)
+        )
+        entropy_jacobian[8] = D_N
+        face_entropy_jacobian = 0.5 * (
+            entropy_jacobian
+            + self._roll(entropy_jacobian, -1, axis)
+        )
+        entropy_modes = np.einsum(
+            "a...,ab...->b...",
+            face_entropy_jacobian,
+            primitive_modes,
+        )
+        tracer = (
+            state.matter.tracer
+            / np.maximum(state.matter.D, 1.0e-300)
+        )
+        face_tracer = 0.5 * (
+            tracer + self._roll(tracer, -1, axis)
+        )
+        right = np.zeros((11, 11) + self.grid.shape)
+        right[:9, :9] = right_physical
+        right[9, :9] = entropy_modes
+        right[10, :9] = (
+            face_tracer[None, ...] * right_physical[0]
+        )
+        right[9, 9] = 1.0
+        right[10, 10] = 1.0
+        transport_N = (
+            state.geometry.lapse * recovery.fluid.velocity[axis]
+            - state.geometry.shift[axis]
+        )
+        face_transport_N = 0.5 * (
+            transport_N + self._roll(transport_N, -1, axis)
+        )
+        full_eigenvalues = np.concatenate(
+            (
+                np.moveaxis(eigenvalues, -1, 0),
+                face_transport_N[None, ...],
+                face_transport_N[None, ...],
+            ),
+            axis=0,
+        )
+        full_batch = np.moveaxis(right, (0, 1), (-2, -1))
+        full_batch /= np.maximum(
+            np.linalg.norm(full_batch, axis=-2)[..., None, :],
+            1.0e-300,
+        )
+        right = np.moveaxis(full_batch, (-2, -1), (0, 1))
+        full_condition = float(np.max(np.linalg.cond(full_batch)))
+        self.last_characteristic_condition_number = max(
+            self.last_characteristic_condition_number,
+            full_condition,
+        )
+        if (
+            not np.isfinite(full_condition)
+            or full_condition
+            >= self.master_parameters.characteristic_condition_limit
+        ):
+            raise FloatingPointError(
+                "extended Carter eigenvectors are ill-conditioned: "
+                f"condition={full_condition:.3e}"
+            )
+        left = np.moveaxis(
+            np.linalg.inv(full_batch), (-2, -1), (0, 1)
+        )
+        full_path = np.zeros((11, 11) + self.grid.shape)
+        full_path[:9, :9] = face_path
+        return right, left, full_path, full_eigenvalues
+
+    def _conservative_rhs(self, state, recovery, h, K):
+        """Couple all Carter principal fields in one characteristic block."""
+        if (
+            self.production_parameters.flux_reconstruction
+            not in {"full_carter_weno5_z", "full_carter_roe"}
+            or not getattr(self.grid, "is_periodic", True)
+            or self._force_first_order
+        ):
+            self._full_carter_target_rhs_cache = None
+            return super()._conservative_rhs(state, recovery, h, K)
+
+        lapse = state.geometry.lapse
+        shift = state.geometry.shift
+        h_inv, _, sqrt_h = inverse_metric(h)
+        total = recovery.total_stress
+        total_momentum_up = np.einsum(
+            "ij...,j...->i...", h_inv, total.momentum
+        )
+        total_stress_mixed = np.einsum(
+            "ik...,kj...->ij...", h_inv, total.stress
+        )
+        transport_N = lapse[None, ...] * recovery.fluid.velocity - shift
+        transport_D = (
+            lapse[None, ...] * recovery.carrier.velocity - shift
+        )
+        D_D = (
+            state.target_charge
+            / self.master_parameters.carrier_charge
+        )
+        conserved = np.concatenate(
+            (
+                state.matter.D[None, ...],
+                D_D[None, ...],
+                state.matter.momentum,
+                state.matter.energy[None, ...],
+                state.target_current,
+                state.matter.entropy[None, ...],
+                state.matter.tracer[None, ...],
+            ),
+            axis=0,
+        )
+        full_derivative = np.zeros_like(conserved)
+        for axis in range(self.grid.ndim):
+            flux = np.concatenate(
+                (
+                    (
+                        state.matter.D * transport_N[axis]
+                    )[None, ...],
+                    (D_D * transport_D[axis])[None, ...],
+                    (
+                        sqrt_h[None, ...]
+                        * (
+                            lapse[None, ...]
+                            * total_stress_mixed[axis]
+                            - shift[axis][None, ...]
+                            * total.momentum
+                        )
+                    ),
+                    (
+                        sqrt_h
+                        * (
+                            lapse * total_momentum_up[axis]
+                            - shift[axis] * total.rho
+                        )
+                    )[None, ...],
+                    state.target_current * transport_D[axis],
+                    (
+                        state.matter.entropy
+                        * transport_N[axis]
+                    )[None, ...],
+                    (
+                        state.matter.tracer
+                        * transport_N[axis]
+                    )[None, ...],
+                ),
+                axis=0,
+            )
+            right, left, path_symbol, eigenvalues = (
+                self._full_carter_characteristic_basis(
+                    state, recovery, h, axis
+                )
+            )
+            speed = self._speed_bound(
+                recovery, h, lapse, shift, axis
+            )
+            if (
+                self.production_parameters.flux_reconstruction
+                == "full_carter_weno5_z"
+            ):
+                high_interface = self._characteristic_weno_interface(
+                    flux,
+                    conserved,
+                    speed,
+                    axis,
+                    right,
+                    left,
+                )
+            else:
+                jump = self._roll(conserved, -1, axis) - conserved
+                characteristic_jump = np.einsum(
+                    "ab...,b...->a...", left, jump
+                )
+                face_speed = np.maximum(
+                    speed, self._roll(speed, -1, axis)
+                )
+                dissipation_rates = (
+                    0.5 * np.abs(eigenvalues)
+                    + 0.5 * face_speed[None, ...]
+                )
+                dissipation = np.einsum(
+                    "ab...,b...->a...",
+                    right,
+                    dissipation_rates * characteristic_jump,
+                )
+                high_interface = 0.5 * (
+                    flux + self._roll(flux, -1, axis)
+                ) - 0.5 * dissipation
+            low_interface = self._piecewise_rusanov_interface(
+                flux, conserved, speed, axis
+            )
+            density_floor = (
+                sqrt_h
+                * self.grhd.parameters.density_floor
+                * self.production_parameters.positivity_floor_factor
+            )
+            carrier_floor = (
+                sqrt_h
+                * self.master_parameters.carrier_floor
+                * self.production_parameters.positivity_floor_factor
+            )
+            energy_floor = (
+                sqrt_h
+                * self.grhd.parameters.density_floor
+                * self.grhd.parameters.internal_energy_floor
+                * self.production_parameters.positivity_floor_factor
+            )
+            interface = self._positivity_blend_interfaces(
+                high_interface,
+                low_interface,
+                conserved,
+                axis,
+                density_floor,
+                metric_inverse=h_inv,
+                energy_index=5,
+                momentum_slice=slice(2, 5),
+                energy_floor=energy_floor,
+                additional_density_floors=((1, carrier_floor),),
+            )
+            jump = self._roll(conserved, -1, axis) - conserved
+            path_jump = np.einsum(
+                "ab...,b...->a...", path_symbol, jump
+            )
+            full_derivative += self._interface_divergence(
+                interface, axis
+            )
+            full_derivative -= 0.5 * (
+                path_jump + self._roll(path_jump, 1, axis)
+            ) / self.grid.spacing[axis]
+
+        derivatives = [
+            full_derivative[0],
+            full_derivative[2:5],
+            full_derivative[5],
+            full_derivative[9],
+            full_derivative[10],
+        ]
+        self._full_carter_target_rhs_cache = (
+            (
+                self.master_parameters.carrier_charge
+                * full_derivative[1]
+            ),
+            full_derivative[6:9],
+        )
+
+        total_stress_up = np.einsum(
+            "ik...,jl...,kl...->ij...", h_inv, h_inv, total.stress
+        )
+        gradient_lapse = self.grid.gradient(lapse)
+        derivatives[2] += sqrt_h * (
+            lapse
+            * np.einsum("ij...,ij...->...", K, total_stress_up)
+            - np.einsum(
+                "i...,i...->...",
+                total_momentum_up,
+                gradient_lapse,
+            )
+        )
+        for component in range(3):
+            source = -total.rho * gradient_lapse[component]
+            if component < self.grid.ndim:
+                for index in range(3):
+                    source += total.momentum[index] * self.grid.derivative(
+                        shift[index], component
+                    )
+                    for other in range(3):
+                        source += (
+                            0.5
+                            * lapse
+                            * total_stress_up[index, other]
+                            * self.grid.derivative(
+                                h[index, other], component
+                            )
+                        )
+            derivatives[1][component] += sqrt_h * source
+        return tuple(derivatives)
+
     def _carrier_characteristic_basis(
         self,
         recovery: Theory33Recovery,
@@ -915,6 +1639,29 @@ class Theory33ProductionSolver(Theory3ProductionSolver):
         lapse = state.geometry.lapse
         shift = state.geometry.shift
         sqrt_h = inverse_metric(h)[2]
+        if (
+            self.production_parameters.flux_reconstruction
+            in {"full_carter_weno5_z", "full_carter_roe"}
+            and self._full_carter_target_rhs_cache is not None
+        ):
+            dcharge, dmomentum = (
+                np.array(self._full_carter_target_rhs_cache[0], copy=True),
+                np.array(self._full_carter_target_rhs_cache[1], copy=True),
+            )
+            drive_power, drive_force = self.system.drive_exchange(
+                h,
+                state.b,
+                state.pi_B,
+                recovery.target_charge_eulerian,
+                recovery.target_current_up,
+            )
+            del drive_power
+            dmomentum += (
+                lapse[None, ...]
+                * sqrt_h[None, ...]
+                * drive_force
+            )
+            return dcharge, dmomentum
         transport_D = lapse[None, ...] * recovery.carrier.velocity - shift
         dcharge = np.zeros_like(state.target_charge)
         dmomentum = np.zeros_like(state.target_current)
@@ -1365,6 +2112,11 @@ class Theory33ProductionSolver(Theory3ProductionSolver):
         self.last_minimum_positivity_theta = 1.0
         self.last_characteristic_condition_number = 1.0
         self.last_stage_positivity_fallbacks = 0
+        self.last_characteristic_maximum_imaginary_part = 0.0
+        self.last_characteristic_maximum_speed = 0.0
+        self.last_characteristic_maximum_physical_speed = 0.0
+        self.last_characteristic_minimum_separation = np.inf
+        self.last_characteristic_maximum_eigenpair_residual = 0.0
         self._active_stage_dt = dt
         strang = self.production_parameters.source_splitting == "strang"
         if strang:
@@ -1655,6 +2407,25 @@ class Theory33ProductionSolver(Theory3ProductionSolver):
             "stage_positivity_fallbacks": self.last_stage_positivity_fallbacks,
             "characteristic_condition_number": (
                 self.last_characteristic_condition_number
+            ),
+            "characteristic_maximum_imaginary_part": (
+                self.last_characteristic_maximum_imaginary_part
+            ),
+            "characteristic_maximum_speed": (
+                self.last_characteristic_maximum_speed
+            ),
+            "characteristic_maximum_physical_speed": (
+                self.last_characteristic_maximum_physical_speed
+            ),
+            "characteristic_maximum_eigenpair_residual": (
+                self.last_characteristic_maximum_eigenpair_residual
+            ),
+            "characteristic_minimum_separation": (
+                self.last_characteristic_minimum_separation
+                if np.isfinite(
+                    self.last_characteristic_minimum_separation
+                )
+                else None
             ),
             "damping_vector_energy_change": self.last_damping_report.vector_energy_change,
             "damping_heat": self.last_damping_report.irreversible_heat,

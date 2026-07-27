@@ -51,10 +51,13 @@ class Theory3ProductionParameters:
             "muscl_mc",
             "weno5_z",
             "characteristic_weno5_z",
+            "full_carter_weno5_z",
+            "full_carter_roe",
         }:
             raise ValueError(
                 "flux_reconstruction must be piecewise_constant, muscl_mc, "
-                "weno5_z, or characteristic_weno5_z"
+                "weno5_z, characteristic_weno5_z, full_carter_weno5_z, "
+                "or full_carter_roe"
             )
         if not 1.0 <= self.reconstruction_theta <= 2.0:
             raise ValueError("reconstruction_theta must lie in [1, 2]")
@@ -655,6 +658,9 @@ class Theory3ProductionSolver:
         energy_index: int | None = None,
         momentum_slice: slice | None = None,
         energy_floor: Array | None = None,
+        additional_density_floors: tuple[
+            tuple[int, Array], ...
+        ] = (),
     ) -> Array:
         """Conservatively blend troubled faces back to the monotone flux.
 
@@ -690,6 +696,23 @@ class Theory3ProductionSolver:
             1.0,
         )
         theta = np.where(troubled, density_theta, theta)
+        for density_index, floor in additional_density_floors:
+            low_component = low_state[density_index]
+            high_component = high_state[density_index]
+            component_troubled = high_component < floor
+            component_theta = np.clip(
+                (low_component - floor)
+                / np.maximum(
+                    low_component - high_component, 1.0e-300
+                ),
+                0.0,
+                1.0,
+            )
+            theta = np.where(
+                component_troubled,
+                np.minimum(theta, component_theta),
+                theta,
+            )
 
         if (
             metric_inverse is not None

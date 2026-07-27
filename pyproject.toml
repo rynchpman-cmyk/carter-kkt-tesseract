@@ -39,6 +39,7 @@ py-modules = [
     "run_tesseract_nr_convergence",
     "run_tesseract_nr_frontier",
     "run_tesseract_nr_shocks",
+    "run_tesseract_carter_riemann",
     "run_theory33_experiments",
     "run_theory33_advanced",
     "run_theory33_hybrid",

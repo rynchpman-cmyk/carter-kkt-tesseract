@@ -250,6 +250,18 @@ through the learned hard phase threshold with all physical recovery gates
 intact. See the
 [characteristic shock frontier report](CHARACTERISTIC_SHOCK_FRONTIER_REPORT.md).
 
+Run the complete Carter eigensystem and Riemann convergence campaign with:
+
+```powershell
+.\run_tesseract_carter_riemann.ps1
+```
+
+The tracked campaign constructs the literal nine-field flux/path Jacobian,
+matches an independent longitudinal acoustic audit, verifies oblique
+rotational consistency, and obtains shock-appropriate convergence through
+128 cells for counterflow and colliding-stream Riemann problems. See the
+[full Carter Riemann report](FULL_CARTER_RIEMANN_REPORT.md).
+
 ### Retrain the conditioned model
 
 ```powershell
@@ -329,6 +341,8 @@ For the exact environment and validation sequence, see
 | `tesseract_nr_frontier_results.json` | Recorded multidimensional frontier evidence |
 | `run_tesseract_nr_shocks.py` | Characteristic shocks, positivity, and phase-crossing campaign |
 | `tesseract_nr_shock_results.json` | Recorded shock-frontier evidence |
+| `run_tesseract_carter_riemann.py` | Full Carter eigensystem and Riemann convergence campaign |
+| `tesseract_carter_riemann_results.json` | Recorded full-symbol/Riemann evidence |
 | `migrate_full_slang.py` | Deterministic GLSL-to-Slang migration and native kernels |
 | `progressive_full_unroll.py` | Piecewise BPTT, continuation, margins, and validation |
 | `train_lyapunov_conditioned.py` | Intrinsic attractor and Lyapunov curriculum |
@@ -357,6 +371,7 @@ artifacts contain everything needed to regenerate the tracked Slang modules.
 - [Constraint-converged neural spacetime report](CONSTRAINED_NEURAL_SPACETIME_REPORT.md)
 - [Neural spacetime frontier report](NEURAL_SPACETIME_FRONTIER_REPORT.md)
 - [Characteristic shock frontier report](CHARACTERISTIC_SHOCK_FRONTIER_REPORT.md)
+- [Full Carter eigensystem and Riemann report](FULL_CARTER_RIEMANN_REPORT.md)
 - [Lyapunov conditioning](docs/LYAPUNOV_CONDITIONING.md)
 - [Visualization instrument](docs/VISUALIZATION.md)
 - [Reproducibility and validation](docs/REPRODUCIBILITY.md)

@@ -1,0 +1,455 @@
+{
+  "colliding_streams": {
+    "cfl": 0.15,
+    "constitutive_model": "analytic_m1",
+    "diagnostics": [
+      {
+        "characteristic_condition_number": 428.7819779478133,
+        "characteristic_maximum_imaginary_part": 0.0,
+        "characteristic_maximum_physical_speed": 0.9662298850578729,
+        "characteristic_maximum_speed": 1.0123677594627485,
+        "maximum_recovery_residual": 8.609808267114393e-10,
+        "maximum_relative_lorentz_factor": 1.0179420871497882,
+        "minimum_carrier_density": 0.003000600886935545,
+        "minimum_density": 0.06500059372082875,
+        "minimum_legendre_eigenvalue": 0.9507011195143242,
+        "minimum_thermodynamic_eigenvalue": 0.8526857082305046,
+        "phase_two_fraction": 0.0,
+        "points": 16,
+        "positivity_limited_faces": 0,
+        "recovery_failures": 0,
+        "variation": {
+          "baryon_density": 0.08999776961447437,
+          "carrier_density": 0.007997883960360642,
+          "carrier_velocity": 0.6922297514129827,
+          "fluid_velocity": 0.12020148729874111,
+          "phase_two": 0.0,
+          "pressure": 0.017133020785500365,
+          "relative_lorentz_factor": 0.052386732658632695
+        }
+      },
+      {
+        "characteristic_condition_number": 428.7819779478133,
+        "characteristic_maximum_imaginary_part": 0.0,
+        "characteristic_maximum_physical_speed": 0.9710485431038163,
+        "characteristic_maximum_speed": 1.0123677594627485,
+        "maximum_recovery_residual": 1.3370732523512622e-09,
+        "maximum_relative_lorentz_factor": 1.033801972932579,
+        "minimum_carrier_density": 0.003000000463939042,
+        "minimum_density": 0.06500000003449033,
+        "minimum_legendre_eigenvalue": 0.950694352515832,
+        "minimum_thermodynamic_eigenvalue": 0.8526763754910072,
+        "phase_two_fraction": 0.0,
+        "points": 32,
+        "positivity_limited_faces": 0,
+        "recovery_failures": 0,
+        "variation": {
+          "baryon_density": 0.08999999985558235,
+          "carrier_density": 0.007999998395144987,
+          "carrier_velocity": 0.9885114962423769,
+          "fluid_velocity": 0.14533620731139124,
+          "phase_two": 0.0,
+          "pressure": 0.017133333325458622,
+          "relative_lorentz_factor": 0.10435896899459962
+        }
+      },
+      {
+        "characteristic_condition_number": 428.7819779629693,
+        "characteristic_maximum_imaginary_part": 0.0,
+        "characteristic_maximum_physical_speed": 0.9747855682714703,
+        "characteristic_maximum_speed": 1.0123677594627485,
+        "maximum_recovery_residual": 1.9928590241392948e-09,
+        "maximum_relative_lorentz_factor": 1.0491697596845517,
+        "minimum_carrier_density": 0.002999999999999999,
+        "minimum_density": 0.06499999999999999,
+        "minimum_legendre_eigenvalue": 0.9506943477505807,
+        "minimum_thermodynamic_eigenvalue": 0.8526763685757008,
+        "phase_two_fraction": 0.0,
+        "points": 64,
+        "positivity_limited_faces": 0,
+        "recovery_failures": 0,
+        "variation": {
+          "baryon_density": 0.09000000000000005,
+          "carrier_density": 0.008000000000000007,
+          "carrier_velocity": 1.2426556280608572,
+          "fluid_velocity": 0.18567745422257348,
+          "phase_two": 0.0,
+          "pressure": 0.01713333339299875,
+          "relative_lorentz_factor": 0.15884319341958308
+        }
+      },
+      {
+        "characteristic_condition_number": 428.78197796806194,
+        "characteristic_maximum_imaginary_part": 0.0,
+        "characteristic_maximum_physical_speed": 0.9771315065778656,
+        "characteristic_maximum_speed": 1.0123677594627485,
+        "maximum_recovery_residual": 1.9823660252882683e-09,
+        "maximum_relative_lorentz_factor": 1.0570964896386041,
+        "minimum_carrier_density": 0.002999999999999999,
+        "minimum_density": 0.06499999999999999,
+        "minimum_legendre_eigenvalue": 0.9506943477505807,
+        "minimum_thermodynamic_eigenvalue": 0.8526763685757008,
+        "phase_two_fraction": 0.0,
+        "points": 128,
+        "positivity_limited_faces": 0,
+        "recovery_failures": 0,
+        "variation": {
+          "baryon_density": 0.09000000000000005,
+          "carrier_density": 0.008000000000000007,
+          "carrier_velocity": 1.407101322210893,
+          "fluid_velocity": 0.2443283507264155,
+          "phase_two": 0.0,
+          "pressure": 0.01713333907651853,
+          "relative_lorentz_factor": 0.1912719384171151
+        }
+      }
+    ],
+    "final_time": 0.02,
+    "observed_orders": [
+      0.8660009857880935,
+      0.8847058903136198
+    ],
+    "problem": "colliding_streams",
+    "qualification": {
+      "all_recoveries_valid": true,
+      "all_symbols_causal": true,
+      "all_symbols_real": true,
+      "legendre_margins_positive": true,
+      "positive_densities": true,
+      "shock_order_resolved": true,
+      "successive_error_decreases": true,
+      "thermodynamic_margins_positive": true
+    },
+    "resolutions": [
+      16,
+      32,
+      64,
+      128
+    ],
+    "successive_field_l1_errors": [
+      {
+        "baryon_density": 0.010533721903821704,
+        "carrier_density": 0.018766031345897525,
+        "carrier_velocity": 0.05164109644626699,
+        "fluid_velocity": 0.046684636945686496,
+        "phase_two": 0.0,
+        "pressure": 0.019250505232176952,
+        "relative_lorentz_factor": 0.0016792177895602048
+      },
+      {
+        "baryon_density": 0.007719904592907642,
+        "carrier_density": 0.012286923211298493,
+        "carrier_velocity": 0.021617672151672578,
+        "fluid_velocity": 0.024329973716294195,
+        "phase_two": 0.0,
+        "pressure": 0.014371845501754655,
+        "relative_lorentz_factor": 0.0011808131612566746
+      },
+      {
+        "baryon_density": 0.004635858097546138,
+        "carrier_density": 0.007750322228638856,
+        "carrier_velocity": 0.011017967114830132,
+        "fluid_velocity": 0.01101746704305796,
+        "phase_two": 0.0,
+        "pressure": 0.008892675430011912,
+        "relative_lorentz_factor": 0.0008298036166571564
+      }
+    ],
+    "successive_l1_errors": [
+      0.024759201610568313,
+      0.013584522055864039,
+      0.007357348921790359
+    ]
+  },
+  "counterflow_shock": {
+    "cfl": 0.15,
+    "constitutive_model": "analytic_m1",
+    "diagnostics": [
+      {
+        "characteristic_condition_number": 420.90532260858686,
+        "characteristic_maximum_imaginary_part": 0.0,
+        "characteristic_maximum_physical_speed": 0.9621406002422384,
+        "characteristic_maximum_speed": 0.9764620306497782,
+        "maximum_recovery_residual": 1.883900048009269e-09,
+        "maximum_relative_lorentz_factor": 1.0041089810061903,
+        "minimum_carrier_density": 0.0035002838152178185,
+        "minimum_density": 0.07000060448540056,
+        "minimum_legendre_eigenvalue": 0.965222848326384,
+        "minimum_thermodynamic_eigenvalue": 0.8750536483783915,
+        "phase_two_fraction": 0.0,
+        "points": 16,
+        "positivity_limited_faces": 0,
+        "recovery_failures": 0,
+        "variation": {
+          "baryon_density": 0.07999769925957978,
+          "carrier_density": 0.004998917184012358,
+          "carrier_velocity": 0.3997923520118158,
+          "fluid_velocity": 0.07684800046588955,
+          "phase_two": 0.0,
+          "pressure": 0.01653300084971559,
+          "relative_lorentz_factor": 0.012833952279874605
+        }
+      },
+      {
+        "characteristic_condition_number": 420.90532260858686,
+        "characteristic_maximum_imaginary_part": 0.0,
+        "characteristic_maximum_physical_speed": 0.9646561673235453,
+        "characteristic_maximum_speed": 0.9764620306497782,
+        "maximum_recovery_residual": 6.987540555428582e-10,
+        "maximum_relative_lorentz_factor": 1.0081183517606442,
+        "minimum_carrier_density": 0.003500000217349625,
+        "minimum_density": 0.07000000003135963,
+        "minimum_legendre_eigenvalue": 0.9652185263228752,
+        "minimum_thermodynamic_eigenvalue": 0.8750473306551483,
+        "phase_two_fraction": 0.0,
+        "points": 32,
+        "positivity_limited_faces": 0,
+        "recovery_failures": 0,
+        "variation": {
+          "baryon_density": 0.07999999985729847,
+          "carrier_density": 0.0049999991813042075,
+          "carrier_velocity": 0.5478718904634574,
+          "fluid_velocity": 0.1067102939973639,
+          "phase_two": 0.0,
+          "pressure": 0.016533333318448903,
+          "relative_lorentz_factor": 0.025883914438664668
+        }
+      },
+      {
+        "characteristic_condition_number": 443.2736809428478,
+        "characteristic_maximum_imaginary_part": 0.0,
+        "characteristic_maximum_physical_speed": 0.9681124268444119,
+        "characteristic_maximum_speed": 0.9764620306497782,
+        "maximum_recovery_residual": 1.020804040262307e-09,
+        "maximum_relative_lorentz_factor": 1.0144437948263616,
+        "minimum_carrier_density": 0.003500000000000001,
+        "minimum_density": 0.07,
+        "minimum_legendre_eigenvalue": 0.9652185234050457,
+        "minimum_thermodynamic_eigenvalue": 0.8750473259428722,
+        "phase_two_fraction": 0.0,
+        "points": 64,
+        "positivity_limited_faces": 0,
+        "recovery_failures": 0,
+        "variation": {
+          "baryon_density": 0.08000000000000002,
+          "carrier_density": 0.004999999999999995,
+          "carrier_velocity": 0.7396503369143341,
+          "fluid_velocity": 0.15618740393099617,
+          "phase_two": 0.0,
+          "pressure": 0.01653333334174087,
+          "relative_lorentz_factor": 0.04490782080245159
+        }
+      },
+      {
+        "characteristic_condition_number": 440.65795124253617,
+        "characteristic_maximum_imaginary_part": 0.0,
+        "characteristic_maximum_physical_speed": 0.9710073437892776,
+        "characteristic_maximum_speed": 0.9764620306497782,
+        "maximum_recovery_residual": 1.7309866243403266e-09,
+        "maximum_relative_lorentz_factor": 1.0182500020233252,
+        "minimum_carrier_density": 0.003500000000000001,
+        "minimum_density": 0.07,
+        "minimum_legendre_eigenvalue": 0.9652185234050457,
+        "minimum_thermodynamic_eigenvalue": 0.8750473259428722,
+        "phase_two_fraction": 0.0,
+        "points": 128,
+        "positivity_limited_faces": 0,
+        "recovery_failures": 0,
+        "variation": {
+          "baryon_density": 0.08000000000000002,
+          "carrier_density": 0.004999999999999995,
+          "carrier_velocity": 0.8771079846825219,
+          "fluid_velocity": 0.22625752899503374,
+          "phase_two": 0.0,
+          "pressure": 0.016533334563764407,
+          "relative_lorentz_factor": 0.05646941621212331
+        }
+      }
+    ],
+    "final_time": 0.02,
+    "observed_orders": [
+      1.016158761691489,
+      0.990641406647344
+    ],
+    "problem": "counterflow_shock",
+    "qualification": {
+      "all_recoveries_valid": true,
+      "all_symbols_causal": true,
+      "all_symbols_real": true,
+      "legendre_margins_positive": true,
+      "positive_densities": true,
+      "shock_order_resolved": true,
+      "successive_error_decreases": true,
+      "thermodynamic_margins_positive": true
+    },
+    "resolutions": [
+      16,
+      32,
+      64,
+      128
+    ],
+    "successive_field_l1_errors": [
+      {
+        "baryon_density": 0.009237893271975188,
+        "carrier_density": 0.012687097169566673,
+        "carrier_velocity": 0.05518429900317437,
+        "fluid_velocity": 0.06650903275029023,
+        "phase_two": 0.0,
+        "pressure": 0.019047299105222838,
+        "relative_lorentz_factor": 0.0005365949778472365
+      },
+      {
+        "baryon_density": 0.006714601718954902,
+        "carrier_density": 0.008208180399904482,
+        "carrier_velocity": 0.022949004175305703,
+        "fluid_velocity": 0.028201680188550845,
+        "phase_two": 0.0,
+        "pressure": 0.014190766208116826,
+        "relative_lorentz_factor": 0.000428009719049572
+      },
+      {
+        "baryon_density": 0.003985460211627371,
+        "carrier_density": 0.005174321014215274,
+        "carrier_velocity": 0.011258133005169781,
+        "fluid_velocity": 0.011129966196341084,
+        "phase_two": 0.0,
+        "pressure": 0.008767890391006781,
+        "relative_lorentz_factor": 0.0002929216518012997
+      }
+    ],
+    "successive_l1_errors": [
+      0.027200369379679425,
+      0.01344870706831372,
+      0.006768115411693598
+    ]
+  },
+  "eigensystem_audit": {
+    "eigenvector_condition_number": 214.8015829570936,
+    "full_eigenvalues": [
+      -0.9440754388145411,
+      -0.3664849470349429,
+      0.01999999999996001,
+      0.01999999999996001,
+      0.020000000002767068,
+      0.079999999999841,
+      0.079999999999841,
+      0.4005991550771115,
+      0.9591044908600503
+    ],
+    "independent_audit_speeds": [
+      -0.9440754388041319,
+      -0.36648494705912116,
+      0.4005991550881505,
+      0.959104490864248
+    ],
+    "longitudinal_acoustic_speeds": [
+      -0.9440754388145411,
+      -0.3664849470349429,
+      0.4005991550771115,
+      0.9591044908600503
+    ],
+    "maximum_acoustic_speed_difference": 2.4178270496832965e-11,
+    "maximum_biorthogonality_residual": 3.886639477596564e-15,
+    "maximum_eigenpair_residual": 1.6646189635038944e-14,
+    "maximum_imaginary_part": 0.0,
+    "path_symbol_norm": 0.07267904092344742,
+    "qualification": {
+      "causal": true,
+      "eigenpairs_close": true,
+      "eigenvalues_real": true,
+      "eigenvectors_conditioned": true,
+      "independent_longitudinal_audit_matches": true,
+      "left_right_biorthogonal": true,
+      "nine_physical_modes_present": true,
+      "path_operator_nonzero": true
+    }
+  },
+  "oblique_symbol_audit": {
+    "maximum_condition_number": 263.14949916439974,
+    "maximum_eigenpair_residual": 5.023759186428833e-15,
+    "maximum_imaginary_part": 1.901585169163107e-13,
+    "maximum_rotational_spectrum_difference": 8.881784197001252e-16,
+    "qualification": {
+      "oblique_rotation_consistent": true,
+      "oblique_symbols_conditioned": true,
+      "x_and_y_eigenpairs_close": true,
+      "x_and_y_symbols_real": true
+    },
+    "x_spectrum": [
+      -0.945825383718808,
+      -0.35308417151328125,
+      0.02474873734147973,
+      0.02474873734160515,
+      0.02474873734160515,
+      0.053033008588885586,
+      0.053033008588929884,
+      0.3956412252808721,
+      0.9559609391288085
+    ],
+    "y_spectrum": [
+      -0.9458253837188071,
+      -0.35308417151328086,
+      0.02474873734147973,
+      0.024748737341605126,
+      0.024748737341605126,
+      0.053033008588885586,
+      0.05303300858892992,
+      0.3956412252808719,
+      0.9559609391288084
+    ]
+  },
+  "principal_system": {
+    "extended_reconstruction_fields": 11,
+    "extension": [
+      "entropy",
+      "tracer"
+    ],
+    "path": "straight-state DLM midpoint fluctuation",
+    "physical_fields": 9,
+    "physical_order": [
+      "baryon_density",
+      "carrier_density",
+      "momentum_x",
+      "momentum_y",
+      "momentum_z",
+      "energy",
+      "carrier_canonical_momentum_x",
+      "carrier_canonical_momentum_y",
+      "carrier_canonical_momentum_z"
+    ],
+    "riemann_flux": "conditioned full-eigensystem Roe-Rusanov blend",
+    "time_integrator": "SSP-RK3 with constitutive projection"
+  },
+  "qualification": {
+    "colliding_all_recoveries_valid": true,
+    "colliding_all_symbols_causal": true,
+    "colliding_all_symbols_real": true,
+    "colliding_legendre_margins_positive": true,
+    "colliding_positive_densities": true,
+    "colliding_shock_order_resolved": true,
+    "colliding_successive_error_decreases": true,
+    "colliding_thermodynamic_margins_positive": true,
+    "counterflow_all_recoveries_valid": true,
+    "counterflow_all_symbols_causal": true,
+    "counterflow_all_symbols_real": true,
+    "counterflow_legendre_margins_positive": true,
+    "counterflow_positive_densities": true,
+    "counterflow_shock_order_resolved": true,
+    "counterflow_successive_error_decreases": true,
+    "counterflow_thermodynamic_margins_positive": true,
+    "eigensystem_causal": true,
+    "eigensystem_eigenpairs_close": true,
+    "eigensystem_eigenvalues_real": true,
+    "eigensystem_eigenvectors_conditioned": true,
+    "eigensystem_independent_longitudinal_audit_matches": true,
+    "eigensystem_left_right_biorthogonal": true,
+    "eigensystem_nine_physical_modes_present": true,
+    "eigensystem_path_operator_nonzero": true,
+    "oblique_oblique_rotation_consistent": true,
+    "oblique_oblique_symbols_conditioned": true,
+    "oblique_x_and_y_eigenpairs_close": true,
+    "oblique_x_and_y_symbols_real": true
+  },
+  "qualified": true,
+  "schema": "tesseract.full-carter-riemann-frontier.v1"
+}

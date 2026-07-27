@@ -213,6 +213,20 @@ tracked record is `tesseract_nr_shock_results.json`; numerical scope and
 limitations are in
 [the characteristic shock frontier report](../CHARACTERISTIC_SHOCK_FRONTIER_REPORT.md).
 
+### 11. Full Carter eigensystem and Riemann convergence
+
+```powershell
+.\run_tesseract_carter_riemann.ps1
+```
+
+This CPU campaign numerically differentiates the literal nine-field
+flux/path principal system, audits the complete degenerate eigenspaces,
+checks oblique rotational consistency, and evolves two analytic-M1
+relativistic multifluid Riemann ladders through 128 cells. The tracked record
+is `tesseract_carter_riemann_results.json`; derivation, measurements, and
+scope are in
+[the full Carter Riemann report](../FULL_CARTER_RIEMANN_REPORT.md).
+
 ## Retraining
 
 ```powershell
