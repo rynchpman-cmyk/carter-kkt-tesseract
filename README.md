@@ -262,6 +262,18 @@ rotational consistency, and obtains shock-appropriate convergence through
 128 cells for counterflow and colliding-stream Riemann problems. See the
 [full Carter Riemann report](FULL_CARTER_RIEMANN_REPORT.md).
 
+Run the frozen-neural learned-phase Riemann campaign with:
+
+```powershell
+.\run_tesseract_neural_phase_riemann.ps1
+```
+
+The tracked 16/32/64/128-cell ladder begins on opposite learned constitutive
+branches, qualifies the exact conserved-state DLM corridor, preserves
+causality and convexity, and dynamically switches four cells at the finest
+level while successive-grid error decreases. See the
+[frozen-neural phase Riemann report](FROZEN_NEURAL_PHASE_RIEMANN_REPORT.md).
+
 ### Retrain the conditioned model
 
 ```powershell
@@ -343,6 +355,8 @@ For the exact environment and validation sequence, see
 | `tesseract_nr_shock_results.json` | Recorded shock-frontier evidence |
 | `run_tesseract_carter_riemann.py` | Full Carter eigensystem and Riemann convergence campaign |
 | `tesseract_carter_riemann_results.json` | Recorded full-symbol/Riemann evidence |
+| `run_tesseract_neural_phase_riemann.py` | Frozen-neural phase-discontinuity convergence campaign |
+| `tesseract_neural_phase_riemann_results.json` | Recorded learned-phase corridor and ladder evidence |
 | `migrate_full_slang.py` | Deterministic GLSL-to-Slang migration and native kernels |
 | `progressive_full_unroll.py` | Piecewise BPTT, continuation, margins, and validation |
 | `train_lyapunov_conditioned.py` | Intrinsic attractor and Lyapunov curriculum |

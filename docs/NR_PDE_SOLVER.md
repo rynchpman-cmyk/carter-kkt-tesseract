@@ -144,6 +144,17 @@ analytic and frozen constrained states for 128 steps, runs a 2D
 constraint/evolution path. See the
 [frontier report](../NEURAL_SPACETIME_FRONTIER_REPORT.md).
 
+Run the converged discontinuous frozen-neural Carter sector with:
+
+```powershell
+.\run_tesseract_neural_phase_riemann.ps1
+```
+
+This audits the actual conserved-state DLM path between opposite learned
+branches and evolves it through 128 cells with the complete Carter
+eigensystem. See the
+[frozen-neural phase Riemann report](../FROZEN_NEURAL_PHASE_RIEMANN_REPORT.md).
+
 ## Validation boundary
 
 The transplanted CPU backend includes regression coverage for:

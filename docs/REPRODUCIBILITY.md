@@ -59,11 +59,19 @@ tree changes.
 ### 1. Artifact/source checks
 
 ```powershell
-python -m unittest discover -s tests -v
+python -m unittest discover -s tests/nr -v
+python -m unittest `
+    tests.test_artifacts `
+    tests.test_theory33_advanced `
+    tests.test_theory33_experiments `
+    tests.test_theory33_hybrid `
+    -v
 python -m py_compile *.py
 ```
 
-These checks do not require a GPU.
+These checks do not require a GPU. The NumPy NR suite and the PyTorch
+constitutive suite intentionally run in separate processes on Windows to
+avoid loading incompatible OpenMP runtimes into one interpreter.
 
 ### 2. PyTorch differentiability
 
@@ -226,6 +234,21 @@ relativistic multifluid Riemann ladders through 128 cells. The tracked record
 is `tesseract_carter_riemann_results.json`; derivation, measurements, and
 scope are in
 [the full Carter Riemann report](../FULL_CARTER_RIEMANN_REPORT.md).
+
+### 12. Frozen-neural phase Riemann convergence
+
+```powershell
+.\run_tesseract_neural_phase_riemann.ps1
+```
+
+This CPU campaign audits the exact straight conserved-state path between
+opposite branches of the digest-locked frozen neural closure and evolves the
+resulting discontinuity on a 16/32/64/128-cell ladder. It requires real and
+causal full Carter symbols, valid recovery, positive convexity margins,
+resolved phase interfaces, periodic baryon/carrier balance, decreasing
+self-error, and a cellwise hard-classifier crossing. The tracked record is
+`tesseract_neural_phase_riemann_results.json`; measurements and scope are in
+[the frozen-neural phase Riemann report](../FROZEN_NEURAL_PHASE_RIEMANN_REPORT.md).
 
 ## Retraining
 

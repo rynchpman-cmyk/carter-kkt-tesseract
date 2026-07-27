@@ -70,6 +70,12 @@ def _riemann_state(
         u_left, u_right = 0.025, -0.02
         d_left, d_right = 0.007, 0.003
         v_left, v_right = 0.06, -0.01
+    elif problem == "neural_phase_contact":
+        n_left, n_right = 0.10, 0.10
+        e_left, e_right = 0.12, 0.12
+        u_left, u_right = 0.0, 0.0
+        d_left, d_right = 0.005, 0.005
+        v_left, v_right = 0.112, 0.103
     else:
         raise ValueError(f"unknown Carter Riemann problem {problem!r}")
     fluid_velocity = solver.grid.zeros((3,))
@@ -228,6 +234,19 @@ def evolve_riemann(
         model=model,
     )
     state = _riemann_state(solver, problem)
+    initial_recovery = solver.recover(state)
+    solver.riemann_initial_baryon = float(
+        solver.grid.integrate(state.matter.D)
+    )
+    solver.riemann_initial_carrier = float(
+        solver.grid.integrate(
+            state.target_charge
+            / solver.master_parameters.carrier_charge
+        )
+    )
+    solver.riemann_initial_phase_two = np.array(
+        initial_recovery.master.phase_two, copy=True
+    )
     while state.time < final_time - 1.0e-15:
         dt = min(
             cfl * solver.grid.spacing[0],
@@ -440,6 +459,33 @@ def riemann_resolution_ladder(
                 "phase_two_fraction": float(
                     np.mean(recovery.master.phase_two)
                 ),
+                "phase_boundary_faces": int(
+                    np.count_nonzero(
+                        recovery.master.phase_two
+                        != np.roll(recovery.master.phase_two, -1)
+                    )
+                ),
+                "phase_cells_changed_from_initial": int(
+                    np.count_nonzero(
+                        recovery.master.phase_two
+                        != solver.riemann_initial_phase_two
+                    )
+                ),
+                "minimum_switching_margin": (
+                    float(
+                        np.min(
+                            np.abs(
+                                recovery.master.relative_lorentz_factor
+                                - 1.0
+                                - recovery.master.phase_threshold
+                            )
+                        )
+                    )
+                    if np.all(
+                        np.isfinite(recovery.master.phase_threshold)
+                    )
+                    else None
+                ),
                 "minimum_density": float(
                     np.min(recovery.fluid.baryon_density)
                 ),
@@ -463,6 +509,23 @@ def riemann_resolution_ladder(
                 ),
                 "positivity_limited_faces": (
                     solver.last_positivity_limited_faces
+                ),
+                "baryon_relative_balance_error": abs(
+                    float(solver.grid.integrate(state.matter.D))
+                    - solver.riemann_initial_baryon
+                )
+                / max(abs(solver.riemann_initial_baryon), 1.0e-300),
+                "carrier_relative_balance_error": abs(
+                    float(
+                        solver.grid.integrate(
+                            state.target_charge
+                            / solver.master_parameters.carrier_charge
+                        )
+                    )
+                    - solver.riemann_initial_carrier
+                )
+                / max(
+                    abs(solver.riemann_initial_carrier), 1.0e-300
                 ),
                 "variation": _variation(snapshot),
             }
@@ -521,6 +584,29 @@ def riemann_resolution_ladder(
         ),
         "shock_order_resolved": bool(orders) and orders[-1] > 0.35,
     }
+    if model == "qualified_frozen":
+        report["qualification"].update(
+            {
+                "both_learned_phases_present": all(
+                    0.0 < item["phase_two_fraction"] < 1.0
+                    for item in diagnostics
+                ),
+                "phase_interfaces_resolved": all(
+                    item["phase_boundary_faces"] >= 2
+                    for item in diagnostics
+                ),
+                "final_switching_margins_nonzero": all(
+                    item["minimum_switching_margin"] is not None
+                    and item["minimum_switching_margin"] > 0.0
+                    for item in diagnostics
+                ),
+                "periodic_number_balances_close": all(
+                    item["baryon_relative_balance_error"] < 2.0e-12
+                    and item["carrier_relative_balance_error"] < 2.0e-12
+                    for item in diagnostics
+                ),
+            }
+        )
     return report
 
 
@@ -620,6 +706,181 @@ def eigensystem_audit(
         ),
     }
     return report
+
+
+def neural_phase_corridor_audit(
+    samples: int = 129,
+    *,
+    artifact_path: str | Path = "theory33_frozen_variants.json",
+) -> dict[str, object]:
+    """Audit the exact straight-conserved-state path between learned phases."""
+    if samples < 17:
+        raise ValueError("neural phase corridor needs at least 17 samples")
+    solver = _solver(
+        samples,
+        reconstruction="full_carter_roe",
+        artifact_path=artifact_path,
+        model="qualified_frozen",
+    )
+    endpoint_state = _riemann_state(
+        solver, "neural_phase_contact"
+    )
+    endpoint_arrays = _state_arrays(endpoint_state)
+    parameter = np.linspace(0.0, 1.0, samples)
+    path_arrays: list[Array] = []
+    for value in endpoint_arrays:
+        left = value[..., 0]
+        right = value[..., -1]
+        path_arrays.append(
+            left[..., None] * (1.0 - parameter)
+            + right[..., None] * parameter
+        )
+    path_state = _with_arrays(
+        endpoint_state, tuple(path_arrays), 0.0
+    )
+    solver._primitive_guess = None
+    recovery = solver.recover(path_state)
+    h, _ = solver.ccz4.physical_geometry(path_state.geometry)
+    symbol, path_symbol, _, _ = solver._full_carter_symbol(
+        recovery,
+        h,
+        path_state.geometry.lapse,
+        path_state.geometry.shift,
+        0,
+    )
+    batch = np.moveaxis(symbol, (0, 1), (-2, -1))
+    eigenvalues, eigenvectors = np.linalg.eig(batch)
+    signed_margin = (
+        recovery.master.relative_lorentz_factor
+        - 1.0
+        - recovery.master.phase_threshold
+    )
+    phase = recovery.master.phase_two
+    transitions = int(np.count_nonzero(phase[1:] != phase[:-1]))
+    report: dict[str, object] = {
+        "samples": samples,
+        "left_phase_two": bool(phase[0]),
+        "right_phase_two": bool(phase[-1]),
+        "phase_transitions": transitions,
+        "left_switching_margin": float(signed_margin[0]),
+        "right_switching_margin": float(signed_margin[-1]),
+        "minimum_absolute_switching_margin": float(
+            np.min(np.abs(signed_margin))
+        ),
+        "maximum_physical_speed": float(
+            np.max(np.abs(eigenvalues.real))
+        ),
+        "maximum_imaginary_part": float(
+            np.max(np.abs(eigenvalues.imag))
+        ),
+        "maximum_eigenvector_condition": float(
+            np.max(np.linalg.cond(eigenvectors))
+        ),
+        "minimum_legendre_eigenvalue": (
+            recovery.report.minimum_legendre_eigenvalue
+        ),
+        "minimum_thermodynamic_eigenvalue": (
+            recovery.report.minimum_thermodynamic_eigenvalue
+        ),
+        "maximum_recovery_residual": (
+            recovery.report.maximum_residual
+        ),
+        "path_symbol_minimum_norm": float(
+            np.min(
+                np.linalg.norm(
+                    np.moveaxis(
+                        path_symbol, (0, 1), (-2, -1)
+                    ),
+                    axis=(-2, -1),
+                )
+            )
+        ),
+    }
+    report["qualification"] = {
+        "endpoints_on_opposite_learned_phases": (
+            report["left_phase_two"]
+            and not report["right_phase_two"]
+        ),
+        "single_hard_transition_on_path": transitions == 1,
+        "endpoint_switching_margins_healthy": (
+            report["left_switching_margin"] > 2.0e-4
+            and report["right_switching_margin"] < -2.0e-4
+        ),
+        "path_recovery_valid": (
+            report["maximum_recovery_residual"] < 2.0e-7
+        ),
+        "path_symbols_real": (
+            report["maximum_imaginary_part"] < 2.0e-6
+        ),
+        "path_symbols_causal": (
+            report["maximum_physical_speed"] <= 1.0 + 2.0e-7
+        ),
+        "path_eigenvectors_conditioned": (
+            report["maximum_eigenvector_condition"] < 1.0e8
+        ),
+        "path_legendre_margin_positive": (
+            report["minimum_legendre_eigenvalue"] > 0.0
+        ),
+        "path_thermodynamic_margin_positive": (
+            report["minimum_thermodynamic_eigenvalue"] > 0.0
+        ),
+        "nonconservative_path_active": (
+            report["path_symbol_minimum_norm"] > 1.0e-8
+        ),
+    }
+    return report
+
+
+def run_neural_phase_riemann_frontier(
+    resolutions: Iterable[int] = (16, 32, 64, 128),
+    *,
+    final_time: float = 0.02,
+    cfl: float = 0.12,
+    corridor_samples: int = 129,
+    artifact_path: str | Path = "theory33_frozen_variants.json",
+) -> dict[str, object]:
+    """Qualify a discontinuous learned-phase mixture through convergence."""
+    corridor = neural_phase_corridor_audit(
+        corridor_samples, artifact_path=artifact_path
+    )
+    ladder = riemann_resolution_ladder(
+        "neural_phase_contact",
+        resolutions,
+        final_time=final_time,
+        cfl=cfl,
+        artifact_path=artifact_path,
+        model="qualified_frozen",
+    )
+    final_phase_changes = [
+        item["phase_cells_changed_from_initial"]
+        for item in ladder["diagnostics"]
+    ]
+    ladder["phase_changes_from_initial_count"] = final_phase_changes
+    ladder["qualification"]["physical_phase_crossing_exercised"] = (
+        max(final_phase_changes) > 0
+    )
+    qualification = {
+        **{
+            f"corridor_{name}": bool(value)
+            for name, value in corridor["qualification"].items()
+        },
+        **{
+            f"ladder_{name}": bool(value)
+            for name, value in ladder["qualification"].items()
+        },
+    }
+    return {
+        "schema": "tesseract.frozen-neural-phase-riemann.v1",
+        "constitutive_model": "qualified_frozen",
+        "variant_digest": QualifiedFrozenClosure(
+            artifact_path
+        ).variant_digest,
+        "path": "straight conserved-state DLM corridor",
+        "corridor": corridor,
+        "resolution_ladder": ladder,
+        "qualification": qualification,
+        "qualified": all(qualification.values()),
+    }
 
 
 def run_carter_riemann_frontier(

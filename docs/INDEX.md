@@ -42,6 +42,12 @@ explains the final system from the inside out.
 16. [Neural spacetime frontier](../NEURAL_SPACETIME_FRONTIER_REPORT.md) —
     WENO5-Z fluxes, Strang splitting, a 128-step constrained horizon, 2D
     continuum convergence, and the complete 3D neural path.
+17. [Full Carter eigensystem and Riemann frontier](../FULL_CARTER_RIEMANN_REPORT.md)
+    — the literal flux/path Jacobian, complete conditioned eigenbasis, and
+    analytic-M1 multifluid shock ladders.
+18. [Frozen-neural phase Riemann frontier](../FROZEN_NEURAL_PHASE_RIEMANN_REPORT.md)
+    — a qualified conserved-state learned-phase corridor and converged
+    16/32/64/128-cell discontinuity with dynamic hard switching.
 
 Measured outputs are preserved separately:
 
@@ -53,3 +59,5 @@ Measured outputs are preserved separately:
 - [Frozen neural PDE promotion](../NEURAL_PDE_PROMOTION_REPORT.md)
 - [Constraint-converged neural spacetime](../CONSTRAINED_NEURAL_SPACETIME_REPORT.md)
 - [Neural spacetime frontier](../NEURAL_SPACETIME_FRONTIER_REPORT.md)
+- [Full Carter eigensystem and Riemann frontier](../FULL_CARTER_RIEMANN_REPORT.md)
+- [Frozen-neural phase Riemann frontier](../FROZEN_NEURAL_PHASE_RIEMANN_REPORT.md)

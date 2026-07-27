@@ -180,10 +180,10 @@ For the faster regression ladder:
 This crosses the numerical-eigensystem and Riemann-convergence boundary, with
 four deliberate limits:
 
-- the resolution ladders use the analytic M1 master function. The qualified
-  frozen neural closure is included in the eigensystem audit and the earlier
-  phase-crossing experiment, but discontinuous neural phase mixtures are not
-  yet claimed to be resolution-converged;
+- the two broad shock ladders here use the analytic M1 master function. A
+  separate, deliberately narrower discontinuous frozen-neural phase mixture
+  is now resolution-converged and documented in the
+  [frozen-neural phase Riemann report](FROZEN_NEURAL_PHASE_RIEMANN_REPORT.md);
 - no closed-form nonlinear two-current Riemann solution is available here,
   so convergence is measured by nested successive-grid \(L_1\) differences;
 - the DLM path uses midpoint quadrature and is therefore shock-consistent only
