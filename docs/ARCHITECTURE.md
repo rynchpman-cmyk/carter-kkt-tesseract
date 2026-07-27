@@ -2,7 +2,7 @@
 
 ## Source-of-truth layers
 
-The project intentionally has three representations of the same system:
+The project intentionally has four complementary representations:
 
 | Layer | File | Role |
 |---|---|---|
@@ -11,6 +11,7 @@ The project intentionally has three representations of the same system:
 | Physical PyTorch | `theory33_hybrid.py` | Timelike two-current M1 closure and characteristic audit |
 | Physical Slang | `theory33_hybrid.slang` | Analytic M1 constitutive and native reverse kernel |
 | Slang | `carter_tesseract_*.slang` | Generated native Vulkan forward and reverse kernels |
+| NR CPU | `tesseract_nr/` | Coupled CCZ4, conservative matter, two-current, and mixed-vector PDE oracle |
 
 `migrate_full_slang.py` mechanically imports the GLSL body, specializes model
 constants from a portable JSON artifact, and appends the differentiable and

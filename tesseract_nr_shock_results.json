@@ -1,0 +1,93 @@
+{
+  "phase_boundary": {
+    "baryon_relative_balance_error": 0.0,
+    "branch_recovery_maximum_residual": 8.972873779297332e-09,
+    "carrier_relative_balance_error": 1.6400632732899014e-16,
+    "characteristic_condition_number": 6.766233788776119,
+    "diagnostic_recovery_failures": 0,
+    "dt": 0.001,
+    "entropy_change": 0.0005264181526901945,
+    "initial_phase_two_fraction": 0.5,
+    "maximum_recovery_residual": 1.734000628661733e-09,
+    "minimum_legendre_eigenvalue": 0.9252839330431115,
+    "minimum_positivity_theta": 1.0,
+    "minimum_thermodynamic_eigenvalue": 0.8338174271933311,
+    "outer_branch_updates": 64,
+    "phase_changes_during_physical_step": 3,
+    "phase_map_recovered_exactly": true,
+    "positivity_limited_faces": 0,
+    "qualification": {
+      "both_hard_phases_present": true,
+      "characteristic_basis_conditioned": true,
+      "entropy_nondecreasing": true,
+      "full_step_recovery_valid": true,
+      "hard_phase_map_recovered": true,
+      "legendre_margin_positive": true,
+      "outer_branch_update_exercised": true,
+      "periodic_number_balances_close": true,
+      "physical_phase_crossing_exercised": true,
+      "thermodynamic_margin_positive": true
+    },
+    "shape": [
+      8,
+      8
+    ],
+    "stage_positivity_fallbacks": 0
+  },
+  "positivity_torture": {
+    "cfl": 0.2,
+    "positivity_floor_factor": 10000000.0,
+    "protected": {
+      "characteristic_condition_number": 10.415841118282675,
+      "limited_faces": 40,
+      "minimum_carrier_floor_ratio": 1.0,
+      "minimum_material_floor_ratio": 1.0,
+      "minimum_theta": 0.3641648560660744
+    },
+    "qualification": {
+      "carrier_floor_preserved": true,
+      "characteristic_basis_conditioned": true,
+      "limiter_is_not_global_first_order": true,
+      "local_face_limiter_exercised": true,
+      "material_floor_preserved": true,
+      "unlimited_control_exposes_undershoot": true
+    },
+    "shape": [
+      16,
+      16
+    ],
+    "unlimited_control": {
+      "characteristic_condition_number": 10.415841118282675,
+      "limited_faces": 0,
+      "minimum_carrier_floor_ratio": 0.9810071239270802,
+      "minimum_material_floor_ratio": 0.9874893007597108,
+      "minimum_theta": 1.0
+    }
+  },
+  "qualification": {
+    "phase_both_hard_phases_present": true,
+    "phase_characteristic_basis_conditioned": true,
+    "phase_entropy_nondecreasing": true,
+    "phase_full_step_recovery_valid": true,
+    "phase_hard_phase_map_recovered": true,
+    "phase_legendre_margin_positive": true,
+    "phase_outer_branch_update_exercised": true,
+    "phase_periodic_number_balances_close": true,
+    "phase_physical_phase_crossing_exercised": true,
+    "phase_thermodynamic_margin_positive": true,
+    "positivity_carrier_floor_preserved": true,
+    "positivity_characteristic_basis_conditioned": true,
+    "positivity_limiter_is_not_global_first_order": true,
+    "positivity_local_face_limiter_exercised": true,
+    "positivity_material_floor_preserved": true,
+    "positivity_unlimited_control_exposes_undershoot": true
+  },
+  "qualified": true,
+  "reconstruction": {
+    "carrier_block": "frozen Carter charge/canonical-momentum basis",
+    "hard_decisions": "piecewise constant inside Newton; updated between solves",
+    "material_block": "frozen relativistic acoustic/contact basis over (D,S_i,E,entropy,tracer)",
+    "method": "local-LF-split characteristic WENO-Z"
+  },
+  "schema": "tesseract.characteristic-shock-frontier.v1"
+}

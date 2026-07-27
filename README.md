@@ -3,12 +3,13 @@
 **A hard-constrained, differentiable Vulkan simulator that grew out of the
 operation \(a \oplus b=\tfrac32(a+b)\).**
 
-![Carter/KKT literal dynamics dashboard](tesseract_conditioning_atlas.png)
+![Tesseract active neural spacetime dashboard](tesseract_full_stack_dashboard.png)
 
 The project combines a parity-gated scalar recurrence, an exact 81-candidate
 box-KKT solve, Carter-style multifluid constitutive structure, a learned scalar
 master function \(\Lambda_\phi\), reverse-mode differentiation through time,
-and intrinsic Lyapunov conditioning.
+intrinsic Lyapunov conditioning, and a standalone coupled
+CCZ4/GRHD/two-current numerical-relativity PDE backend.
 
 The conditioned literal map has been validated for **128 undamped Vulkan
 steps** with:
@@ -78,7 +79,8 @@ flowchart LR
 - A self-contained Theory 3.3 mode with future-timelike currents, an analytic
   M1 master, physical admissibility gates, and a differentiated
   characteristic audit.
-- A four-panel Vulkan-backed phase-space and tesseract visualization.
+- A full-stack neural-spacetime observatory plus the original interactive
+  Vulkan phase-space and tesseract instrument.
 
 ## Quick start
 
@@ -90,9 +92,19 @@ The project currently targets Windows PowerShell with a Vulkan-capable GPU.
 .\run_visualization.ps1
 ```
 
-Use the controls to switch between the explosive baseline and conditioned
-model, scrub recurrence time, animate the projected tesseract, and save a
-snapshot.
+The default view rebuilds a live qualified 24x24 frozen-neural CMC slice and
+connects it to the tracked WENO, continuum, 128-step horizon, and 3D
+qualification evidence. Use `-Fast` to render directly from the recorded
+artifact without rebuilding the slice.
+
+Open the original interactive Vulkan recurrence microscope with:
+
+```powershell
+.\run_visualization.ps1 -Mode literal
+```
+
+That view can switch between the explosive baseline and conditioned model,
+scrub recurrence time, animate the projected tesseract, and save a snapshot.
 
 ### Conditioned literal recurrence
 
@@ -153,6 +165,114 @@ that frozen result on Vulkan with:
 
 See the
 [advanced qualification report](THEORY33_ADVANCED_REPORT.md).
+
+### Numerical-relativity PDE solver
+
+Run the standalone float64 coupled Theory 3.3 reference backend with:
+
+```powershell
+.\run_tesseract_nr.ps1 -Points 16 -Steps 4 -Dt 1e-5
+```
+
+It evolves 52 scalar components per cell across CCZ4 geometry and gauge,
+conservative relativistic matter, Carter baryon/carrier currents, and mixed
+massive-vector fields. The runner reports conservation, recovery, entropy,
+Gauss, convexity, and spacetime-constraint diagnostics. See
+[the NR PDE solver guide](docs/NR_PDE_SOLVER.md).
+The source boundary, state contract, validation evidence, and remaining
+promotion gates are recorded in the
+[NR PDE transplant report](NR_PDE_TRANSPLANT_REPORT.md).
+
+The qualified frozen invariant gradient can now drive both multifluid
+primitive recovery and the complete coupled RHS:
+
+```powershell
+.\run_tesseract_nr.ps1 `
+    -Points 8 `
+    -Steps 1 `
+    -Dt 1e-5 `
+    -Constitutive frozen
+```
+
+Compare the active learned phase against the analytic M1 control on a nested
+resolution ladder with:
+
+```powershell
+.\run_tesseract_nr_convergence.ps1 `
+    -Resolutions 8,16,32 `
+    -FinalTime 1e-5 `
+    -Output tesseract_nr_convergence_results.json
+```
+
+The recorded 8/16/32 ladder passes recovery, conservation, entropy,
+switching, Legendre, thermodynamic, hyperbolicity, causality, and
+self-convergence gates. Its scope and measurements are in the
+[neural PDE promotion report](NEURAL_PDE_PROMOTION_REPORT.md).
+
+Construct and evolve resolution-matched active-neural CMC spacetimes with:
+
+```powershell
+.\run_tesseract_nr_constrained.ps1 `
+    -Resolutions 8,16,32 `
+    -FinalTime 1e-6 `
+    -Output tesseract_nr_constrained_results.json
+```
+
+The recorded constrained ladder uses 10/20/40 complete steps and obtains
+approximately second-order convergence of the Hamiltonian constraint,
+momentum constraint, evolved state, and geometric-work energy rate. See the
+[constrained neural spacetime report](CONSTRAINED_NEURAL_SPACETIME_REPORT.md).
+
+Run the high-order, long-horizon, multidimensional frontier campaign with:
+
+```powershell
+.\run_tesseract_nr_frontier.ps1 `
+    -HorizonSteps 128 `
+    -Output tesseract_nr_frontier_results.json
+```
+
+The recorded campaign qualifies fifth-order WENO5-Z reconstruction, a
+128-step constrained analytic/frozen horizon, second-order 2D CCZ4 and
+complete-state convergence on 6x6/12x12/24x24 grids, and the complete 6x6x6
+neural-spacetime path. See the
+[neural spacetime frontier report](NEURAL_SPACETIME_FRONTIER_REPORT.md).
+
+Run the characteristic-shock and hard-phase-boundary campaign with:
+
+```powershell
+.\run_tesseract_nr_shocks.ps1
+```
+
+The tracked 2D campaign exposes density-floor violations in the unlimited
+control, preserves both material and carrier floors with conservative local
+face limiting, forces 64 recovery branch updates, and evolves three cells
+through the learned hard phase threshold with all physical recovery gates
+intact. See the
+[characteristic shock frontier report](CHARACTERISTIC_SHOCK_FRONTIER_REPORT.md).
+
+Run the complete Carter eigensystem and Riemann convergence campaign with:
+
+```powershell
+.\run_tesseract_carter_riemann.ps1
+```
+
+The tracked campaign constructs the literal nine-field flux/path Jacobian,
+matches an independent longitudinal acoustic audit, verifies oblique
+rotational consistency, and obtains shock-appropriate convergence through
+128 cells for counterflow and colliding-stream Riemann problems. See the
+[full Carter Riemann report](FULL_CARTER_RIEMANN_REPORT.md).
+
+Run the frozen-neural learned-phase Riemann campaign with:
+
+```powershell
+.\run_tesseract_neural_phase_riemann.ps1
+```
+
+The tracked 16/32/64/128-cell ladder begins on opposite learned constitutive
+branches, qualifies the exact conserved-state DLM corridor, preserves
+causality and convexity, and dynamically switches four cells at the finest
+level while successive-grid error decreases. See the
+[frozen-neural phase Riemann report](FROZEN_NEURAL_PHASE_RIEMANN_REPORT.md).
 
 ### Retrain the conditioned model
 
@@ -222,10 +342,27 @@ For the exact environment and validation sequence, see
 | `theory33_advanced.py` | Frozen replay, PSD mobility, event BPTT, and margin continuation |
 | `theory33_frozen_variants.json` | Qualified replayable constitutive weights and evidence |
 | `theory33_qualified_frozen.slang` | Generated qualified frozen Vulkan module |
+| `tesseract_nr/` | Standalone CCZ4 + Theory 3.3 numerical-relativity backend |
+| `run_tesseract_nr.py` | Coupled NR smoke and checkpoint runner |
+| `run_tesseract_nr.ps1` | PowerShell entrypoint for the NR backend |
+| `run_tesseract_nr_convergence.py` | Analytic/frozen nested-grid study |
+| `tesseract_nr_convergence_results.json` | Recorded active-neural ladder |
+| `run_tesseract_nr_constrained.py` | Constraint-converged neural spacetime ladder |
+| `tesseract_nr_constrained_results.json` | Recorded CMC/CCZ4 convergence evidence |
+| `run_tesseract_nr_frontier.py` | WENO, long-horizon, 2D/3D qualification campaign |
+| `tesseract_nr_frontier_results.json` | Recorded multidimensional frontier evidence |
+| `run_tesseract_nr_shocks.py` | Characteristic shocks, positivity, and phase-crossing campaign |
+| `tesseract_nr_shock_results.json` | Recorded shock-frontier evidence |
+| `run_tesseract_carter_riemann.py` | Full Carter eigensystem and Riemann convergence campaign |
+| `tesseract_carter_riemann_results.json` | Recorded full-symbol/Riemann evidence |
+| `run_tesseract_neural_phase_riemann.py` | Frozen-neural phase-discontinuity convergence campaign |
+| `tesseract_neural_phase_riemann_results.json` | Recorded learned-phase corridor and ladder evidence |
 | `migrate_full_slang.py` | Deterministic GLSL-to-Slang migration and native kernels |
 | `progressive_full_unroll.py` | Piecewise BPTT, continuation, margins, and validation |
 | `train_lyapunov_conditioned.py` | Intrinsic attractor and Lyapunov curriculum |
-| `visualize_tesseract.py` | Vulkan-backed interactive dynamics instrument |
+| `visualize_tesseract.py` | Full-stack and Vulkan literal visualization entrypoint |
+| `tesseract_full_stack_visualizer.py` | Qualified neural-spacetime dashboard renderer |
+| `tesseract_full_stack_dashboard.png` | README full-stack qualification dashboard |
 | `hybrid_model*.json` | Portable model weights, dynamics, and audit metadata |
 | `carter_tesseract*.slang` | Generated baseline and conditioned Slang modules |
 | `test_*.py` | PyTorch, Slang AD, recurrence, and backend validation |
@@ -244,6 +381,11 @@ artifacts contain everything needed to regenerate the tracked Slang modules.
 - [Theory 3.3 physical hybrid mode](docs/THEORY33_HYBRID.md)
 - [Theory 3.3 experiment report](THEORY33_EXPERIMENT_REPORT.md)
 - [Advanced frozen-constitutive report](THEORY33_ADVANCED_REPORT.md)
+- [Frozen neural PDE promotion report](NEURAL_PDE_PROMOTION_REPORT.md)
+- [Constraint-converged neural spacetime report](CONSTRAINED_NEURAL_SPACETIME_REPORT.md)
+- [Neural spacetime frontier report](NEURAL_SPACETIME_FRONTIER_REPORT.md)
+- [Characteristic shock frontier report](CHARACTERISTIC_SHOCK_FRONTIER_REPORT.md)
+- [Full Carter eigensystem and Riemann report](FULL_CARTER_RIEMANN_REPORT.md)
 - [Lyapunov conditioning](docs/LYAPUNOV_CONDITIONING.md)
 - [Visualization instrument](docs/VISUALIZATION.md)
 - [Reproducibility and validation](docs/REPRODUCIBILITY.md)

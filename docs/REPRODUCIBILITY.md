@@ -59,11 +59,19 @@ tree changes.
 ### 1. Artifact/source checks
 
 ```powershell
-python -m unittest discover -s tests -v
+python -m unittest discover -s tests/nr -v
+python -m unittest `
+    tests.test_artifacts `
+    tests.test_theory33_advanced `
+    tests.test_theory33_experiments `
+    tests.test_theory33_hybrid `
+    -v
 python -m py_compile *.py
 ```
 
-These checks do not require a GPU.
+These checks do not require a GPU. The NumPy NR suite and the PyTorch
+constitutive suite intentionally run in separate processes on Windows to
+avoid loading incompatible OpenMP runtimes into one interpreter.
 
 ### 2. PyTorch differentiability
 
@@ -184,6 +192,63 @@ Requires:
 - healthy margins;
 - non-increasing Lyapunov value;
 - convergence at horizons 64 and 128.
+
+### 9. Neural numerical-relativity frontier
+
+```powershell
+.\run_tesseract_nr_frontier.ps1 `
+    -HorizonSteps 128 `
+    -Output tesseract_nr_frontier_results.json
+```
+
+This CPU campaign verifies the coupled WENO5-Z order, runs constrained
+analytic and frozen models for 128 steps, measures the 2D
+6x6/12x12/24x24 continuum ladder, and completes a 6x6x6 frozen-neural
+constraint/evolution smoke. The tracked JSON is the machine-readable
+qualification record.
+
+### 10. Characteristic shocks and hard phase crossings
+
+```powershell
+.\run_tesseract_nr_shocks.ps1
+```
+
+This CPU campaign runs a 2D characteristic-WENO rarefaction-corner
+falsification control, qualifies conservative material/carrier positivity
+limiting, forces outer hard-branch recovery updates, and evolves a
+checkerboard Carter interface through the learned phase threshold. The
+tracked record is `tesseract_nr_shock_results.json`; numerical scope and
+limitations are in
+[the characteristic shock frontier report](../CHARACTERISTIC_SHOCK_FRONTIER_REPORT.md).
+
+### 11. Full Carter eigensystem and Riemann convergence
+
+```powershell
+.\run_tesseract_carter_riemann.ps1
+```
+
+This CPU campaign numerically differentiates the literal nine-field
+flux/path principal system, audits the complete degenerate eigenspaces,
+checks oblique rotational consistency, and evolves two analytic-M1
+relativistic multifluid Riemann ladders through 128 cells. The tracked record
+is `tesseract_carter_riemann_results.json`; derivation, measurements, and
+scope are in
+[the full Carter Riemann report](../FULL_CARTER_RIEMANN_REPORT.md).
+
+### 12. Frozen-neural phase Riemann convergence
+
+```powershell
+.\run_tesseract_neural_phase_riemann.ps1
+```
+
+This CPU campaign audits the exact straight conserved-state path between
+opposite branches of the digest-locked frozen neural closure and evolves the
+resulting discontinuity on a 16/32/64/128-cell ladder. It requires real and
+causal full Carter symbols, valid recovery, positive convexity margins,
+resolved phase interfaces, periodic baryon/carrier balance, decreasing
+self-error, and a cellwise hard-classifier crossing. The tracked record is
+`tesseract_neural_phase_riemann_results.json`; measurements and scope are in
+[the frozen-neural phase Riemann report](../FROZEN_NEURAL_PHASE_RIEMANN_REPORT.md).
 
 ## Retraining
 

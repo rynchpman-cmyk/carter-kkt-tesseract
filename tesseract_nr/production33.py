@@ -1,0 +1,2526 @@
+"""CCZ4 + mixed Proca + Theory 3.3 two-current production reference.
+
+The Theory 3.2 state layout is reused for checkpoint and integrator
+compatibility, but ``target_charge`` stores the densitized carrier source
+charge and ``target_current`` stores the densitized carrier canonical
+momentum.  Neither is a phenomenological reservoir variable.
+"""
+
+from __future__ import annotations
+
+from dataclasses import asdict, dataclass
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+
+from .adm import inverse_metric
+from .ccz4 import CCZ4Parameters, CCZ4State
+from .grhd import GRHDParameters
+from .grid import Array, PeriodicGrid
+from .io import load_checkpoint, save_checkpoint
+from .matter import FluidPrimitive, lorentz_factor
+from .production3 import (
+    FiniteDampingReport,
+    Theory3MatterState,
+    Theory3ProductionParameters,
+    Theory3ProductionSolver,
+    Theory3ProductionState,
+    _add_stress,
+)
+from .theory3 import Theory3Parameters
+from .theory33 import (
+    CarrierPrimitive,
+    MasterState,
+    Theory33MasterFunction,
+    Theory33MasterParameters,
+)
+
+
+@dataclass(frozen=True)
+class Theory33RecoveryReport:
+    failed_cells: int
+    atmosphere_cells: int
+    maximum_residual: float
+    minimum_carrier_density: float
+    maximum_relative_lorentz_factor: float
+    minimum_legendre_eigenvalue: float
+    minimum_thermodynamic_eigenvalue: float
+    phase_crossings: int
+
+
+@dataclass(frozen=True)
+class Theory33Recovery:
+    fluid: FluidPrimitive
+    carrier: CarrierPrimitive
+    master: MasterState
+    entropy_per_baryon: Array
+    sound_speed: Array
+    material_stress: Any
+    vector_stress: Any
+    total_stress: Any
+    target_charge_eulerian: Array
+    target_current_up: Array
+    report: Theory33RecoveryReport
+
+
+class Theory33ProductionSolver(Theory3ProductionSolver):
+    def __init__(
+        self,
+        grid: PeriodicGrid,
+        master: Theory33MasterParameters | None = None,
+        vector: Theory3Parameters | None = None,
+        ccz4: CCZ4Parameters | None = None,
+        grhd: GRHDParameters | None = None,
+        production: Theory3ProductionParameters | None = None,
+        constitutive_closure: Any | None = None,
+    ) -> None:
+        master_parameters = master or Theory33MasterParameters()
+        if vector is None:
+            vector = Theory3Parameters(
+                target_speed=max(master_parameters.carrier_sound_speed, 0.9),
+                target_relaxation_time=master_parameters.relaxation_time,
+                target_strength=0.0,
+                gamma_ad=master_parameters.gamma_ad,
+            )
+        if abs(vector.gamma_ad - master_parameters.gamma_ad) > 1.0e-14:
+            raise ValueError("Theory 3.3 master and vector gamma_ad must agree")
+        super().__init__(grid, vector, ccz4, grhd, production)
+        self.master_parameters = master_parameters
+        self.master = Theory33MasterFunction(
+            master_parameters,
+            constitutive_closure=constitutive_closure,
+        )
+        self.constitutive_model = self.master.constitutive_model
+        self.constitutive_variant_digest = getattr(
+            constitutive_closure,
+            "variant_digest",
+            None,
+        )
+        self._primitive_guess: Array | None = None
+        self.last_drag_heat = 0.0
+        self.last_drag_entropy_change = 0.0
+        self.last_projection_entropy_change = 0.0
+        self.last_projection_minimum_change = 0.0
+        self.last_step_entropy_change = 0.0
+        self.last_carrier_boundary_number_outflow = 0.0
+        self.last_carrier_number_change = 0.0
+        self.last_carrier_number_balance_residual = 0.0
+        self.last_phase_crossings = 0
+        self.last_stage_positivity_fallbacks = 0
+        self.last_characteristic_maximum_imaginary_part = 0.0
+        self.last_characteristic_maximum_speed = 0.0
+        self.last_characteristic_maximum_physical_speed = 0.0
+        self.last_characteristic_minimum_separation = np.inf
+        self.last_characteristic_maximum_eigenpair_residual = 0.0
+        self._full_carter_target_rhs_cache: tuple[
+            Array, Array
+        ] | None = None
+
+    def _entropy_internal(self, density: float, entropy: float) -> float:
+        p = self.master_parameters
+        log_K = np.clip((p.gamma_ad - 1.0) * entropy, -700.0, 700.0)
+        pressure = np.exp(log_K) * max(density, 1.0e-300) ** p.gamma_ad
+        return pressure / (
+            (p.gamma_ad - 1.0) * max(density, 1.0e-300)
+        )
+
+    def _cell_predictions(
+        self,
+        x: np.ndarray,
+        h: np.ndarray,
+        sqrt_h: float,
+        entropy_per_baryon: float,
+        phase_override: bool | None = None,
+    ) -> np.ndarray:
+        n = float(np.exp(np.clip(x[0], -700.0, 700.0)))
+        q_N = np.asarray(x[1:4], dtype=float)
+        d = float(np.exp(np.clip(x[4], -700.0, 700.0)))
+        q_D = np.asarray(x[5:8], dtype=float)
+        W_N = float(np.sqrt(1.0 + q_N @ h @ q_N))
+        W_D = float(np.sqrt(1.0 + q_D @ h @ q_D))
+        u = q_N / W_N
+        v = q_D / W_D
+        u_down = h @ u
+        v_down = h @ v
+        gamma_rel = max(W_N * W_D - q_N @ h @ q_D, 1.0)
+        x2 = n * d * gamma_rel
+        Lambda, gradient, _, _, _ = self.master.invariant_response(
+            n**2,
+            d**2,
+            x2,
+            entropy_per_baryon,
+            phase_override=phase_override,
+        )
+        B_N = float(-2.0 * gradient[..., 0])
+        B_D = float(-2.0 * gradient[..., 1])
+        Q = float(-gradient[..., 2])
+        Lambda = float(Lambda)
+        Psi = Lambda + B_N * n**2 + B_D * d**2 + 2.0 * Q * x2
+        nW = n * W_N
+        dW = d * W_D
+        energy = -Psi + B_N * nW**2 + B_D * dW**2 + 2.0 * Q * nW * dW
+        momentum = (
+            B_N * nW**2 * u_down
+            + B_D * dW**2 * v_down
+            + Q * nW * dW * (u_down + v_down)
+        )
+        chi = B_D * dW * v_down + Q * nW * u_down
+        D_N = sqrt_h * nW
+        D_D = sqrt_h * dW
+        P_D = D_D * chi
+        return np.concatenate(([D_N, D_D], momentum, [energy], P_D))
+
+    def _cell_phase(
+        self,
+        x: np.ndarray,
+        h: np.ndarray,
+        entropy_per_baryon: float,
+    ) -> bool | None:
+        """Classify a primitive once for a piecewise-constant local solve."""
+        if self.master.constitutive_closure is None:
+            return None
+        n = float(np.exp(np.clip(x[0], -700.0, 700.0)))
+        d = float(np.exp(np.clip(x[4], -700.0, 700.0)))
+        q_N = np.asarray(x[1:4], dtype=float)
+        q_D = np.asarray(x[5:8], dtype=float)
+        W_N = float(np.sqrt(1.0 + q_N @ h @ q_N))
+        W_D = float(np.sqrt(1.0 + q_D @ h @ q_D))
+        gamma_rel = max(W_N * W_D - q_N @ h @ q_D, 1.0)
+        _, _, phase_two, _, _ = self.master.invariant_response(
+            n**2,
+            d**2,
+            n * d * gamma_rel,
+            entropy_per_baryon,
+        )
+        return bool(phase_two)
+
+    @staticmethod
+    def _cell_jacobian(function, point: np.ndarray) -> np.ndarray:
+        base = function(point)
+        jac = np.empty((base.size, point.size), dtype=float)
+        for column in range(point.size):
+            step = 2.0e-6 * max(1.0, abs(float(point[column])))
+            plus = point.copy()
+            minus = point.copy()
+            plus[column] += step
+            minus[column] -= step
+            jac[:, column] = (function(plus) - function(minus)) / (2.0 * step)
+        return jac
+
+    def _recover_cells(
+        self,
+        h: Array,
+        D_N: Array,
+        D_D: Array,
+        momentum: Array,
+        energy: Array,
+        P_D: Array,
+        entropy_per_baryon: Array,
+    ) -> tuple[FluidPrimitive, CarrierPrimitive, Array, int, int]:
+        shape = self.grid.shape
+        count = int(np.prod(shape))
+        h_flat = h.reshape(3, 3, count)
+        sqrt_flat = inverse_metric(h)[2].reshape(count)
+        D_N_flat = D_N.reshape(count)
+        D_D_flat = D_D.reshape(count)
+        S_flat = momentum.reshape(3, count)
+        E_flat = energy.reshape(count)
+        P_flat = P_D.reshape(3, count)
+        entropy_flat = entropy_per_baryon.reshape(count)
+        guess_flat = None
+        if self._primitive_guess is not None and self._primitive_guess.shape == (8,) + shape:
+            guess_flat = self._primitive_guess.reshape(8, count)
+        solved = np.empty((8, count), dtype=float)
+        residuals = np.empty(count, dtype=float)
+        failed = 0
+        phase_crossings = 0
+        for cell in range(count):
+            target = np.concatenate(
+                (
+                    [D_N_flat[cell], D_D_flat[cell]],
+                    S_flat[:, cell],
+                    [E_flat[cell]],
+                    P_flat[:, cell],
+                )
+            )
+            energy_scale = max(abs(E_flat[cell]), np.linalg.norm(S_flat[:, cell]), 1.0e-10)
+            carrier_scale = max(abs(D_D_flat[cell]), 1.0e-10)
+            momentum_scale = max(np.linalg.norm(P_flat[:, cell]), carrier_scale, 1.0e-10)
+            scale = np.array(
+                [
+                    max(abs(D_N_flat[cell]), 1.0e-10),
+                    carrier_scale,
+                    energy_scale,
+                    energy_scale,
+                    energy_scale,
+                    energy_scale,
+                    momentum_scale,
+                    momentum_scale,
+                    momentum_scale,
+                ]
+            )
+            if guess_flat is not None:
+                x = guess_flat[:, cell].copy()
+            else:
+                n0 = max(D_N_flat[cell] / max(sqrt_flat[cell], 1.0e-300), self.grhd.parameters.density_floor)
+                d0 = max(D_D_flat[cell] / max(sqrt_flat[cell], 1.0e-300), self.master_parameters.carrier_floor)
+                denominator = max(E_flat[cell] + 1.0e-8, 1.0e-8)
+                velocity = np.linalg.solve(h_flat[:, :, cell], S_flat[:, cell]) / denominator
+                speed_sq = float(velocity @ h_flat[:, :, cell] @ velocity)
+                if speed_sq >= 0.5:
+                    velocity *= np.sqrt(0.5 / max(speed_sq, 1.0e-300))
+                W0 = 1.0 / np.sqrt(1.0 - float(velocity @ h_flat[:, :, cell] @ velocity))
+                q0 = W0 * velocity
+                x = np.concatenate(([np.log(n0)], q0, [np.log(d0)], q0))
+
+            phase_override = self._cell_phase(
+                x,
+                h_flat[:, :, cell],
+                float(entropy_flat[cell]),
+            )
+            final = np.inf
+            for transition in range(
+                self.production_parameters.phase_transition_iterations + 1
+            ):
+                function = lambda value: self._cell_predictions(
+                    value,
+                    h_flat[:, :, cell],
+                    float(sqrt_flat[cell]),
+                    float(entropy_flat[cell]),
+                    phase_override,
+                )
+                for _ in range(
+                    self.production_parameters.recovery_iterations
+                ):
+                    prediction = function(x)
+                    residual = (prediction - target) / scale
+                    norm = float(np.max(np.abs(residual)))
+                    if norm < max(
+                        self.production_parameters.recovery_tolerance,
+                        2.0e-8,
+                    ):
+                        break
+                    jac = self._cell_jacobian(function, x) / scale[:, None]
+                    delta = np.linalg.lstsq(
+                        jac, -residual, rcond=1.0e-12
+                    )[0]
+                    accepted = False
+                    for power in range(10):
+                        trial = x + delta * (0.5**power)
+                        trial[0] = np.clip(trial[0], -700.0, 700.0)
+                        trial[4] = np.clip(trial[4], -700.0, 700.0)
+                        trial_residual = (function(trial) - target) / scale
+                        if np.max(np.abs(trial_residual)) < norm:
+                            x = trial
+                            accepted = True
+                            break
+                    if not accepted:
+                        break
+                final = float(
+                    np.max(np.abs((function(x) - target) / scale))
+                )
+                final_phase = self._cell_phase(
+                    x,
+                    h_flat[:, :, cell],
+                    float(entropy_flat[cell]),
+                )
+                if phase_override is None or final_phase == phase_override:
+                    break
+                phase_crossings += 1
+                if (
+                    transition
+                    >= self.production_parameters.phase_transition_iterations
+                ):
+                    failed += 1
+                    break
+                phase_override = final_phase
+            residuals[cell] = final
+            if not np.isfinite(final) or final > 2.0e-6:
+                failed += 1
+            solved[:, cell] = x
+
+        self._primitive_guess = solved.reshape((8,) + shape)
+        n = np.exp(solved[0]).reshape(shape)
+        d = np.exp(solved[4]).reshape(shape)
+        q_N = solved[1:4].reshape((3,) + shape)
+        q_D = solved[5:8].reshape((3,) + shape)
+        W_N = np.sqrt(1.0 + np.einsum("ij...,i...,j...->...", h, q_N, q_N))
+        W_D = np.sqrt(1.0 + np.einsum("ij...,i...,j...->...", h, q_D, q_D))
+        velocity_N = q_N / W_N[None, ...]
+        velocity_D = q_D / W_D[None, ...]
+        internal = np.empty(shape, dtype=float)
+        for index in np.ndindex(shape):
+            internal[index] = self._entropy_internal(float(n[index]), float(entropy_per_baryon[index]))
+        sigma = np.zeros(shape)
+        fluid = FluidPrimitive(n, internal, velocity_N, sigma)
+        carrier = CarrierPrimitive(d, velocity_D)
+        return (
+            fluid,
+            carrier,
+            residuals.reshape(shape),
+            failed,
+            phase_crossings,
+        )
+
+    def _recover_cells_from_energy(
+        self,
+        h: Array,
+        D_N: Array,
+        D_D: Array,
+        momentum: Array,
+        energy: Array,
+        P_D: Array,
+        entropy_guess: Array,
+    ) -> tuple[FluidPrimitive, CarrierPrimitive, Array, Array, int, int]:
+        """Invert the nine independent material conserved variables.
+
+        The production state also transports entropy.  At finite resolution
+        that tenth value is redundant with total energy and the two-current
+        master function, so Runge--Kutta stage states need a projection back
+        to the constitutive manifold.  This square inversion leaves both
+        currents, energy-momentum, and carrier canonical momentum untouched;
+        it determines the thermodynamic entropy represented by those values.
+        """
+        shape = self.grid.shape
+        count = int(np.prod(shape))
+        h_flat = h.reshape(3, 3, count)
+        sqrt_flat = inverse_metric(h)[2].reshape(count)
+        D_N_flat = D_N.reshape(count)
+        D_D_flat = D_D.reshape(count)
+        S_flat = momentum.reshape(3, count)
+        E_flat = energy.reshape(count)
+        P_flat = P_D.reshape(3, count)
+        entropy_flat = entropy_guess.reshape(count)
+        guess_flat = None
+        if self._primitive_guess is not None and self._primitive_guess.shape == (8,) + shape:
+            guess_flat = self._primitive_guess.reshape(8, count)
+        solved = np.empty((9, count), dtype=float)
+        residuals = np.empty(count, dtype=float)
+        failed = 0
+        phase_crossings = 0
+        for cell in range(count):
+            target = np.concatenate(
+                (
+                    [D_N_flat[cell], D_D_flat[cell]],
+                    S_flat[:, cell],
+                    [E_flat[cell]],
+                    P_flat[:, cell],
+                )
+            )
+            energy_scale = max(
+                abs(E_flat[cell]), np.linalg.norm(S_flat[:, cell]), 1.0e-10
+            )
+            carrier_scale = max(abs(D_D_flat[cell]), 1.0e-10)
+            momentum_scale = max(
+                np.linalg.norm(P_flat[:, cell]), carrier_scale, 1.0e-10
+            )
+            scale = np.array(
+                [
+                    max(abs(D_N_flat[cell]), 1.0e-10),
+                    carrier_scale,
+                    energy_scale,
+                    energy_scale,
+                    energy_scale,
+                    energy_scale,
+                    momentum_scale,
+                    momentum_scale,
+                    momentum_scale,
+                ]
+            )
+            if guess_flat is not None:
+                primitive = guess_flat[:, cell]
+                x = np.concatenate(
+                    (
+                        [primitive[0], entropy_flat[cell]],
+                        primitive[1:4],
+                        [primitive[4]],
+                        primitive[5:8],
+                    )
+                )
+            else:
+                n0 = max(
+                    D_N_flat[cell] / max(sqrt_flat[cell], 1.0e-300),
+                    self.grhd.parameters.density_floor,
+                )
+                d0 = max(
+                    D_D_flat[cell] / max(sqrt_flat[cell], 1.0e-300),
+                    self.master_parameters.carrier_floor,
+                )
+                denominator = max(E_flat[cell] + 1.0e-8, 1.0e-8)
+                velocity = (
+                    np.linalg.solve(h_flat[:, :, cell], S_flat[:, cell])
+                    / denominator
+                )
+                speed_sq = float(velocity @ h_flat[:, :, cell] @ velocity)
+                if speed_sq >= 0.5:
+                    velocity *= np.sqrt(0.5 / max(speed_sq, 1.0e-300))
+                W0 = 1.0 / np.sqrt(
+                    1.0 - float(velocity @ h_flat[:, :, cell] @ velocity)
+                )
+                q0 = W0 * velocity
+                x = np.concatenate(
+                    ([np.log(n0), entropy_flat[cell]], q0, [np.log(d0)], q0)
+                )
+
+            primitive_for_phase = np.concatenate(
+                ([x[0]], x[2:5], [x[5]], x[6:9])
+            )
+            phase_override = self._cell_phase(
+                primitive_for_phase,
+                h_flat[:, :, cell],
+                float(x[1]),
+            )
+
+            final = np.inf
+            for transition in range(
+                self.production_parameters.phase_transition_iterations + 1
+            ):
+                def function(value: np.ndarray) -> np.ndarray:
+                    primitive = np.concatenate(
+                        (
+                            [value[0]],
+                            value[2:5],
+                            [value[5]],
+                            value[6:9],
+                        )
+                    )
+                    return self._cell_predictions(
+                        primitive,
+                        h_flat[:, :, cell],
+                        float(sqrt_flat[cell]),
+                        float(value[1]),
+                        phase_override,
+                    )
+
+                for _ in range(
+                    self.production_parameters.recovery_iterations
+                ):
+                    residual = (function(x) - target) / scale
+                    norm = float(np.max(np.abs(residual)))
+                    if norm < max(
+                        self.production_parameters.recovery_tolerance,
+                        2.0e-9,
+                    ):
+                        break
+                    jac = self._cell_jacobian(function, x) / scale[:, None]
+                    delta = np.linalg.solve(jac, -residual)
+                    accepted = False
+                    for power in range(12):
+                        trial = x + delta * (0.5**power)
+                        trial[0] = np.clip(trial[0], -700.0, 700.0)
+                        trial[5] = np.clip(trial[5], -700.0, 700.0)
+                        if (
+                            np.max(
+                                np.abs((function(trial) - target) / scale)
+                            )
+                            < norm
+                        ):
+                            x = trial
+                            accepted = True
+                            break
+                    if not accepted:
+                        break
+                final = float(
+                    np.max(np.abs((function(x) - target) / scale))
+                )
+                primitive_final = np.concatenate(
+                    ([x[0]], x[2:5], [x[5]], x[6:9])
+                )
+                final_phase = self._cell_phase(
+                    primitive_final,
+                    h_flat[:, :, cell],
+                    float(x[1]),
+                )
+                if phase_override is None or final_phase == phase_override:
+                    break
+                phase_crossings += 1
+                if (
+                    transition
+                    >= self.production_parameters.phase_transition_iterations
+                ):
+                    failed += 1
+                    break
+                phase_override = final_phase
+            residuals[cell] = final
+            if not np.isfinite(final) or final > 2.0e-7:
+                failed += 1
+            solved[:, cell] = x
+
+        density = np.exp(solved[0]).reshape(shape)
+        entropy = solved[1].reshape(shape)
+        q_N = solved[2:5].reshape((3,) + shape)
+        carrier_density = np.exp(solved[5]).reshape(shape)
+        q_D = solved[6:9].reshape((3,) + shape)
+        W_N = np.sqrt(1.0 + np.einsum("ij...,i...,j...->...", h, q_N, q_N))
+        W_D = np.sqrt(1.0 + np.einsum("ij...,i...,j...->...", h, q_D, q_D))
+        internal = np.empty(shape, dtype=float)
+        for index in np.ndindex(shape):
+            internal[index] = self._entropy_internal(
+                float(density[index]), float(entropy[index])
+            )
+        fluid = FluidPrimitive(
+            density, internal, q_N / W_N[None, ...], np.zeros(shape)
+        )
+        carrier = CarrierPrimitive(
+            carrier_density, q_D / W_D[None, ...]
+        )
+        self._primitive_guess = np.concatenate(
+            (
+                solved[0:1],
+                solved[2:5],
+                solved[5:6],
+                solved[6:9],
+            ),
+            axis=0,
+        ).reshape((8,) + shape)
+        return (
+            fluid,
+            carrier,
+            entropy,
+            residuals.reshape(shape),
+            failed,
+            phase_crossings,
+        )
+
+    def _project_to_master_manifold(
+        self, state: Theory3ProductionState
+    ) -> Theory3ProductionState:
+        """Reconcile redundant entropy after a conservative RK stage."""
+        h, _ = self.ccz4.physical_geometry(state.geometry)
+        _, _, sqrt_h = inverse_metric(h)
+        source_charge = state.target_charge / sqrt_h
+        vector_stress = self.system.vector_stress(
+            h,
+            state.a,
+            state.pi_A,
+            state.b,
+            state.pi_B,
+            state.longitudinal_A,
+            state.longitudinal_B,
+            source_charge,
+        )
+        entropy_guess = state.matter.entropy / np.maximum(
+            state.matter.D, 1.0e-300
+        )
+        (
+            fluid,
+            carrier,
+            entropy,
+            residual,
+            failed,
+            phase_crossings,
+        ) = self._recover_cells_from_energy(
+            h,
+            state.matter.D,
+            state.target_charge / self.master_parameters.carrier_charge,
+            state.matter.momentum / sqrt_h[None, ...] - vector_stress.momentum,
+            state.matter.energy / sqrt_h - vector_stress.rho,
+            state.target_current,
+            entropy_guess,
+        )
+        self.last_phase_crossings = phase_crossings
+        if failed:
+            raise FloatingPointError(
+                "Theory 3.3 energy-manifold projection failed: "
+                f"cells={failed}, residual={float(np.max(residual)):.3e}"
+            )
+        master = self.master.evaluate(h, fluid, carrier)
+        if np.any(
+            master.relative_lorentz_factor
+            > self.master_parameters.maximum_relative_lorentz_factor
+        ):
+            raise FloatingPointError(
+                "Theory 3.3 energy-manifold projection left the counterflow domain"
+            )
+        projected_entropy = state.matter.D * entropy
+        correction = projected_entropy - state.matter.entropy
+        self.last_projection_entropy_change += float(self.grid.integrate(correction))
+        self.last_projection_minimum_change = min(
+            self.last_projection_minimum_change, float(np.min(correction))
+        )
+        state.matter.entropy = projected_entropy
+        return state
+
+    def initialize(
+        self,
+        geometry: CCZ4State,
+        fluid: FluidPrimitive,
+        *,
+        carrier: CarrierPrimitive | None = None,
+        a: Array | None = None,
+        pi_A: Array | None = None,
+        b: Array | None = None,
+        pi_B: Array | None = None,
+    ) -> Theory3ProductionState:
+        h, _ = self.ccz4.physical_geometry(geometry)
+        _, _, sqrt_h = inverse_metric(h)
+        a = self.grid.zeros((3,)) if a is None else np.asarray(a, dtype=float)
+        b = self.grid.zeros((3,)) if b is None else np.asarray(b, dtype=float)
+        pi_A = self.grid.zeros((3,)) if pi_A is None else np.asarray(pi_A, dtype=float)
+        pi_B = self.grid.zeros((3,)) if pi_B is None else np.asarray(pi_B, dtype=float)
+        if carrier is None:
+            carrier = CarrierPrimitive(
+                np.maximum(
+                    self.master_parameters.target_fraction * fluid.baryon_density,
+                    self.master_parameters.carrier_floor,
+                ),
+                np.array(fluid.velocity, copy=True),
+            )
+        master = self.master.evaluate(h, fluid, carrier)
+        D_D, P_D = self.master.conserved_carrier(h, master)
+        target_charge = self.master_parameters.carrier_charge * D_D
+        longitudinal_A, longitudinal_B = self.system.initial_longitudinal_charges(h, pi_A, pi_B)
+        vector_stress = self.system.vector_stress(
+            h,
+            a,
+            pi_A,
+            b,
+            pi_B,
+            longitudinal_A,
+            longitudinal_B,
+            master.source_charge_eulerian,
+        )
+        total = _add_stress(master.stress, vector_stress)
+        W_N = lorentz_factor(h, fluid.velocity)
+        D_N = sqrt_h * fluid.baryon_density * W_N
+        entropy = D_N * master.entropy_per_baryon
+        tracer = D_N * fluid.sigma
+        matter = Theory3MatterState(
+            D_N,
+            sqrt_h[None, ...] * total.momentum,
+            sqrt_h * total.rho,
+            entropy,
+            tracer,
+        )
+        state = Theory3ProductionState(
+            geometry,
+            matter,
+            a.copy(),
+            pi_A.copy(),
+            b.copy(),
+            pi_B.copy(),
+            longitudinal_A,
+            longitudinal_B,
+            self.grid.zeros(),
+            self.grid.zeros(),
+            target_charge,
+            P_D,
+            geometry.time,
+        )
+        q_N = W_N[None, ...] * fluid.velocity
+        W_D = lorentz_factor(h, carrier.velocity)
+        q_D = W_D[None, ...] * carrier.velocity
+        self._primitive_guess = np.concatenate(
+            (
+                np.log(fluid.baryon_density)[None, ...],
+                q_N,
+                np.log(carrier.number_density)[None, ...],
+                q_D,
+            ),
+            axis=0,
+        )
+        self.recover(state)
+        return state
+
+    def vacuum_state(self) -> Theory3ProductionState:
+        fluid = FluidPrimitive(
+            np.full(self.grid.shape, self.grhd.parameters.density_floor),
+            np.full(self.grid.shape, self.grhd.parameters.internal_energy_floor),
+            self.grid.zeros((3,)),
+            self.grid.zeros(),
+        )
+        carrier = CarrierPrimitive(
+            np.full(self.grid.shape, self.master_parameters.carrier_floor),
+            self.grid.zeros((3,)),
+        )
+        return self.initialize(self.ccz4.flat_state(), fluid, carrier=carrier)
+
+    def recover(self, state: Theory3ProductionState) -> Theory33Recovery:
+        h, _ = self.ccz4.physical_geometry(state.geometry)
+        _, _, sqrt_h = inverse_metric(h)
+        source_charge = state.target_charge / sqrt_h
+        vector_stress = self.system.vector_stress(
+            h,
+            state.a,
+            state.pi_A,
+            state.b,
+            state.pi_B,
+            state.longitudinal_A,
+            state.longitudinal_B,
+            source_charge,
+        )
+        material_energy = state.matter.energy / sqrt_h - vector_stress.rho
+        material_momentum = state.matter.momentum / sqrt_h[None, ...] - vector_stress.momentum
+        D_D = state.target_charge / self.master_parameters.carrier_charge
+        entropy_per_baryon = state.matter.entropy / np.maximum(state.matter.D, 1.0e-300)
+        fluid, carrier, residual, failed, phase_crossings = self._recover_cells(
+            h,
+            state.matter.D,
+            D_D,
+            material_momentum,
+            material_energy,
+            state.target_current,
+            entropy_per_baryon,
+        )
+        self.last_phase_crossings = phase_crossings
+        fluid = FluidPrimitive(
+            fluid.baryon_density,
+            fluid.specific_internal_energy,
+            fluid.velocity,
+            state.matter.tracer / np.maximum(state.matter.D, 1.0e-300),
+        )
+        master = self.master.evaluate(h, fluid, carrier)
+        legendre_trace = master.B_N + master.B_D
+        legendre_disc = np.sqrt(
+            np.maximum((master.B_N - master.B_D) ** 2 + 4.0 * master.entrainment**2, 0.0)
+        )
+        legendre_min = 0.5 * (legendre_trace - legendre_disc)
+        thermo_trace = master.thermodynamic_hessian_nn + master.thermodynamic_hessian_dd
+        thermo_disc = np.sqrt(
+            np.maximum(
+                (master.thermodynamic_hessian_nn - master.thermodynamic_hessian_dd) ** 2
+                + 4.0 * master.thermodynamic_hessian_nd**2,
+                0.0,
+            )
+        )
+        thermo_min = 0.5 * (thermo_trace - thermo_disc)
+        failed += int(
+            np.count_nonzero(
+                (legendre_min <= self.master_parameters.convexity_floor)
+                | (thermo_min <= self.master_parameters.convexity_floor)
+                | (master.relative_lorentz_factor < 1.0 - 1.0e-10)
+                | (
+                    master.relative_lorentz_factor
+                    > self.master_parameters.maximum_relative_lorentz_factor
+                )
+            )
+        )
+        report = Theory33RecoveryReport(
+            failed,
+            int(np.count_nonzero(state.matter.D <= sqrt_h * self.grhd.parameters.density_floor * (1.0 + 1.0e-10))),
+            float(np.max(residual)),
+            float(np.min(carrier.number_density)),
+            float(np.max(master.relative_lorentz_factor)),
+            float(np.min(legendre_min)),
+            float(np.min(thermo_min)),
+            phase_crossings,
+        )
+        if failed:
+            raise FloatingPointError(
+                "Theory 3.3 multifluid recovery failed: "
+                f"cells={failed}, residual={report.maximum_residual:.3e}, "
+                f"legendre={report.minimum_legendre_eigenvalue:.3e}, "
+                f"thermo={report.minimum_thermodynamic_eigenvalue:.3e}"
+            )
+        material_stress = master.stress
+        if not self.production_parameters.atmosphere_gravitates:
+            atmosphere = (
+                state.matter.D
+                <= sqrt_h
+                * self.grhd.parameters.density_floor
+                * (1.0 + 1.0e-10)
+            ) & (
+                carrier.number_density
+                <= self.master_parameters.carrier_floor * (1.0 + 1.0e-10)
+            )
+            material_stress = type(master.stress)(
+                np.where(atmosphere, 0.0, master.stress.rho),
+                np.where(atmosphere[None, ...], 0.0, master.stress.momentum),
+                np.where(atmosphere[None, None, ...], 0.0, master.stress.stress),
+                np.where(atmosphere, 0.0, master.stress.trace),
+            )
+        total = _add_stress(material_stress, vector_stress)
+        sound = np.sqrt(
+            np.clip(
+                self.master_parameters.gamma_ad
+                * self.master.thermal_pressure(fluid.baryon_density, fluid.specific_internal_energy)
+                / np.maximum(
+                    self.master.thermal_energy(fluid.baryon_density, fluid.specific_internal_energy)
+                    + self.master.thermal_pressure(fluid.baryon_density, fluid.specific_internal_energy),
+                    1.0e-300,
+                ),
+                0.0,
+                1.0,
+            )
+        )
+        return Theory33Recovery(
+            fluid,
+            carrier,
+            master,
+            entropy_per_baryon,
+            sound,
+            material_stress,
+            vector_stress,
+            total,
+            master.source_charge_eulerian,
+            master.source_current_up,
+            report,
+        )
+
+    def _speed_bound(self, recovery, h, lapse, shift, axis):
+        metric_light = np.sqrt(np.maximum(inverse_metric(h)[0][axis, axis], 0.0))
+        return np.abs(shift[axis]) + lapse * metric_light
+
+    def _path_product(
+        self, coefficient: Array, field: Array, axis: int
+    ) -> Array:
+        """Midpoint straight-path discretization of ``coefficient*d(field)``."""
+        field_right = self._roll(field, -1, axis)
+        field_left = self._roll(field, 1, axis)
+        coefficient_right = 0.5 * (
+            coefficient + self._roll(coefficient, -1, axis)
+        )
+        coefficient_left = 0.5 * (
+            coefficient + self._roll(coefficient, 1, axis)
+        )
+        return (
+            coefficient_right * (field_right - field)
+            + coefficient_left * (field - field_left)
+        ) / (2.0 * self.grid.spacing[axis])
+
+    def _carter_principal_fields(
+        self,
+        primitive: Array,
+        h: Array,
+        lapse: Array,
+        shift: Array,
+        axis: int,
+        phase_override: Array | bool | None,
+    ) -> tuple[Array, Array, Array, Array, Array]:
+        """Evaluate the literal nine-field Carter principal subsystem.
+
+        The conserved order is ``(D_N,D_D,S_i,E,P_i^D)``.  The returned path
+        coefficient multiplies derivatives of ``chi_0`` and ``chi_axis`` in
+        the canonical-momentum equation.  Hard constitutive decisions are
+        supplied by the caller and remain fixed during numerical
+        differentiation.
+        """
+        _, _, sqrt_h = inverse_metric(h)
+        h_inv = inverse_metric(h)[0]
+        n = np.exp(np.clip(primitive[0], -700.0, 700.0))
+        q_N = primitive[1:4]
+        d = np.exp(np.clip(primitive[4], -700.0, 700.0))
+        q_D = primitive[5:8]
+        entropy = primitive[8]
+        W_N = np.sqrt(
+            1.0 + np.einsum("ij...,i...,j...->...", h, q_N, q_N)
+        )
+        W_D = np.sqrt(
+            1.0 + np.einsum("ij...,i...,j...->...", h, q_D, q_D)
+        )
+        velocity_N = q_N / W_N[None, ...]
+        velocity_D = q_D / W_D[None, ...]
+        velocity_N_down = np.einsum(
+            "ij...,j...->i...", h, velocity_N
+        )
+        velocity_D_down = np.einsum(
+            "ij...,j...->i...", h, velocity_D
+        )
+        relative_gamma = np.maximum(
+            W_N * W_D
+            - np.einsum("ij...,i...,j...->...", h, q_N, q_D),
+            1.0,
+        )
+        cross = n * d * relative_gamma
+        lambda_mf, gradient, _, _, _ = self.master.invariant_response(
+            n**2,
+            d**2,
+            cross,
+            entropy,
+            phase_override=phase_override,
+        )
+        B_N = -2.0 * gradient[..., 0]
+        B_D = -2.0 * gradient[..., 1]
+        entrainment = -gradient[..., 2]
+        pressure = (
+            lambda_mf
+            + B_N * n**2
+            + B_D * d**2
+            + 2.0 * entrainment * cross
+        )
+        nW = n * W_N
+        dW = d * W_D
+        energy = (
+            -pressure
+            + B_N * nW**2
+            + B_D * dW**2
+            + 2.0 * entrainment * nW * dW
+        )
+        momentum = (
+            B_N[None, ...]
+            * nW[None, ...] ** 2
+            * velocity_N_down
+            + B_D[None, ...]
+            * dW[None, ...] ** 2
+            * velocity_D_down
+            + entrainment[None, ...]
+            * nW[None, ...]
+            * dW[None, ...]
+            * (velocity_N_down + velocity_D_down)
+        )
+        stress = pressure[None, None, ...] * h
+        stress += (
+            B_N[None, None, ...]
+            * nW[None, None, ...] ** 2
+            * velocity_N_down[:, None, ...]
+            * velocity_N_down[None, :, ...]
+        )
+        stress += (
+            B_D[None, None, ...]
+            * dW[None, None, ...] ** 2
+            * velocity_D_down[:, None, ...]
+            * velocity_D_down[None, :, ...]
+        )
+        stress += (
+            entrainment[None, None, ...]
+            * nW[None, None, ...]
+            * dW[None, None, ...]
+            * (
+                velocity_N_down[:, None, ...]
+                * velocity_D_down[None, :, ...]
+                + velocity_D_down[:, None, ...]
+                * velocity_N_down[None, :, ...]
+            )
+        )
+        stress_mixed = np.einsum(
+            "ik...,kj...->ij...", h_inv, stress
+        )
+        momentum_up = np.einsum(
+            "ij...,j...->i...", h_inv, momentum
+        )
+        chi_down = (
+            B_D[None, ...] * dW[None, ...] * velocity_D_down
+            + entrainment[None, ...]
+            * nW[None, ...]
+            * velocity_N_down
+        )
+        chi_normal = B_D * dW + entrainment * nW
+        chi_zero = -lapse * chi_normal + np.einsum(
+            "i...,i...->...", shift, chi_down
+        )
+        D_N = sqrt_h * nW
+        D_D = sqrt_h * dW
+        P_D = D_D[None, ...] * chi_down
+        conserved = np.concatenate(
+            (
+                D_N[None, ...],
+                D_D[None, ...],
+                (sqrt_h[None, ...] * momentum),
+                (sqrt_h * energy)[None, ...],
+                P_D,
+            ),
+            axis=0,
+        )
+        transport_N = lapse[None, ...] * velocity_N - shift
+        transport_D = lapse[None, ...] * velocity_D - shift
+        flux = np.concatenate(
+            (
+                (D_N * transport_N[axis])[None, ...],
+                (D_D * transport_D[axis])[None, ...],
+                (
+                    sqrt_h[None, ...]
+                    * (
+                        lapse[None, ...] * stress_mixed[axis]
+                        - shift[axis][None, ...] * momentum
+                    )
+                ),
+                (
+                    sqrt_h
+                    * (
+                        lapse * momentum_up[axis]
+                        - shift[axis] * energy
+                    )
+                )[None, ...],
+                P_D * transport_D[axis],
+            ),
+            axis=0,
+        )
+        return (
+            conserved,
+            flux,
+            chi_zero,
+            chi_down[axis],
+            sqrt_h * dW,
+        )
+
+    def _full_carter_symbol(
+        self,
+        recovery: Theory33Recovery,
+        h: Array,
+        lapse: Array,
+        shift: Array,
+        axis: int,
+    ) -> tuple[Array, Array, Array, Array]:
+        """Numerically form ``dF/dU-B_rhs`` on one frozen hard branch."""
+        W_N = lorentz_factor(h, recovery.fluid.velocity)
+        W_D = lorentz_factor(h, recovery.carrier.velocity)
+        primitive = np.concatenate(
+            (
+                np.log(recovery.fluid.baryon_density)[None, ...],
+                W_N[None, ...] * recovery.fluid.velocity,
+                np.log(recovery.carrier.number_density)[None, ...],
+                W_D[None, ...] * recovery.carrier.velocity,
+                recovery.entropy_per_baryon[None, ...],
+            ),
+            axis=0,
+        )
+        phase = recovery.master.phase_two
+        base = self._carter_principal_fields(
+            primitive, h, lapse, shift, axis, phase
+        )
+        time_jacobian = np.empty((9, 9) + self.grid.shape)
+        flux_jacobian = np.empty_like(time_jacobian)
+        chi_zero_jacobian = np.empty((9,) + self.grid.shape)
+        chi_axis_jacobian = np.empty_like(chi_zero_jacobian)
+        for column in range(9):
+            step = 2.0e-6 * np.maximum(
+                1.0, np.abs(primitive[column])
+            )
+            plus = np.array(primitive, copy=True)
+            minus = np.array(primitive, copy=True)
+            plus[column] += step
+            minus[column] -= step
+            plus_fields = self._carter_principal_fields(
+                plus, h, lapse, shift, axis, phase
+            )
+            minus_fields = self._carter_principal_fields(
+                minus, h, lapse, shift, axis, phase
+            )
+            denominator = 2.0 * step
+            time_jacobian[:, column] = (
+                plus_fields[0] - minus_fields[0]
+            ) / denominator[None, ...]
+            flux_jacobian[:, column] = (
+                plus_fields[1] - minus_fields[1]
+            ) / denominator[None, ...]
+            chi_zero_jacobian[column] = (
+                plus_fields[2] - minus_fields[2]
+            ) / denominator
+            chi_axis_jacobian[column] = (
+                plus_fields[3] - minus_fields[3]
+            ) / denominator
+        transport_D = (
+            lapse * recovery.carrier.velocity[axis] - shift[axis]
+        )
+        path_primitive = np.zeros_like(time_jacobian)
+        path_primitive[6 + axis] = -base[4][None, ...] * (
+            chi_zero_jacobian
+            + transport_D[None, ...] * chi_axis_jacobian
+        )
+        time_batch = np.moveaxis(
+            time_jacobian, (0, 1), (-2, -1)
+        )
+        flux_batch = np.moveaxis(
+            flux_jacobian + path_primitive,
+            (0, 1),
+            (-2, -1),
+        )
+        inverse_time = np.linalg.inv(time_batch)
+        symbol_batch = flux_batch @ inverse_time
+        path_batch = (
+            np.moveaxis(path_primitive, (0, 1), (-2, -1))
+            @ inverse_time
+        )
+        symbol = np.moveaxis(symbol_batch, (-2, -1), (0, 1))
+        path_symbol = np.moveaxis(
+            path_batch, (-2, -1), (0, 1)
+        )
+        return symbol, path_symbol, time_jacobian, primitive
+
+    def _full_carter_characteristic_basis(
+        self,
+        state: Theory3ProductionState,
+        recovery: Theory33Recovery,
+        h: Array,
+        axis: int,
+    ) -> tuple[Array, Array, Array, Array]:
+        """Return the complete numerical 9+2 Carter eigensystem at faces."""
+        lapse = state.geometry.lapse
+        shift = state.geometry.shift
+        symbol, path_symbol, time_jacobian, primitive = (
+            self._full_carter_symbol(
+                recovery, h, lapse, shift, axis
+            )
+        )
+        neighbor_symbol = self._roll(symbol, -1, axis)
+        physical_values = np.linalg.eigvals(
+            np.moveaxis(symbol, (0, 1), (-2, -1))
+        )
+        self.last_characteristic_maximum_physical_speed = max(
+            self.last_characteristic_maximum_physical_speed,
+            float(np.max(np.abs(physical_values.real))),
+        )
+        face_symbol = 0.5 * (symbol + neighbor_symbol)
+        crossing = (
+            recovery.master.phase_two
+            != self._roll(recovery.master.phase_two, -1, axis)
+        )
+        cell_batch = np.moveaxis(symbol, (0, 1), (-2, -1))
+        neighbor_batch = np.moveaxis(
+            neighbor_symbol, (0, 1), (-2, -1)
+        )
+        average_batch = np.moveaxis(
+            face_symbol, (0, 1), (-2, -1)
+        )
+        _, cell_vectors = np.linalg.eig(cell_batch)
+        _, neighbor_vectors = np.linalg.eig(neighbor_batch)
+        _, average_vectors = np.linalg.eig(average_batch)
+        cell_condition = np.linalg.cond(cell_vectors)
+        neighbor_condition = np.linalg.cond(neighbor_vectors)
+        average_condition = np.linalg.cond(average_vectors)
+        use_physical_side = crossing | (
+            average_condition
+            > 0.01
+            * self.master_parameters.characteristic_condition_limit
+        )
+        if np.any(use_physical_side):
+            use_cell = cell_condition <= neighbor_condition
+            selected = np.where(
+                use_cell[None, None, ...],
+                symbol,
+                neighbor_symbol,
+            )
+            face_symbol = np.where(
+                use_physical_side[None, None, ...],
+                selected,
+                face_symbol,
+            )
+        face_path = 0.5 * (
+            path_symbol + self._roll(path_symbol, -1, axis)
+        )
+        batch = np.moveaxis(face_symbol, (0, 1), (-2, -1))
+        eigenvalues, eigenvectors = np.linalg.eig(batch)
+        imaginary = float(np.max(np.abs(eigenvalues.imag)))
+        self.last_characteristic_maximum_imaginary_part = max(
+            self.last_characteristic_maximum_imaginary_part, imaginary
+        )
+        if imaginary > 2.0e-6:
+            raise FloatingPointError(
+                "full Carter symbol is not strongly hyperbolic: "
+                f"maximum imaginary speed={imaginary:.3e}"
+            )
+        order = np.argsort(eigenvalues.real, axis=-1)
+        eigenvalues = np.take_along_axis(
+            eigenvalues.real, order, axis=-1
+        )
+        eigenvectors = np.take_along_axis(
+            eigenvectors.real,
+            order[..., None, :],
+            axis=-1,
+        )
+        flat_matrix = batch.reshape((-1, 9, 9))
+        flat_values = eigenvalues.reshape((-1, 9))
+        flat_vectors = eigenvectors.reshape((-1, 9, 9))
+        identity9 = np.eye(9)
+        for point in range(flat_values.shape[0]):
+            values_at_point = flat_values[point]
+            start = 0
+            tolerance = 2.0e-6 * max(
+                1.0, float(np.max(np.abs(values_at_point)))
+            )
+            while start < 9:
+                stop = start + 1
+                while (
+                    stop < 9
+                    and abs(
+                        values_at_point[stop]
+                        - values_at_point[stop - 1]
+                    )
+                    <= tolerance
+                ):
+                    stop += 1
+                multiplicity = stop - start
+                if multiplicity > 1:
+                    center = float(
+                        np.mean(values_at_point[start:stop])
+                    )
+                    _, _, right_singular = np.linalg.svd(
+                        flat_matrix[point] - center * identity9
+                    )
+                    flat_vectors[
+                        point, :, start:stop
+                    ] = right_singular[-multiplicity:].T
+                start = stop
+        eigenvectors = flat_vectors.reshape(eigenvectors.shape)
+        norm = np.linalg.norm(eigenvectors, axis=-2)
+        eigenvectors /= np.maximum(norm[..., None, :], 1.0e-300)
+        largest = np.argmax(np.abs(eigenvectors), axis=-2)
+        pivot = np.take_along_axis(
+            eigenvectors, largest[..., None, :], axis=-2
+        ).squeeze(-2)
+        eigenvectors *= np.where(
+            pivot < 0.0, -1.0, 1.0
+        )[..., None, :]
+        eigenpair_residual = float(
+            np.max(
+                np.abs(
+                    batch @ eigenvectors
+                    - eigenvectors * eigenvalues[..., None, :]
+                )
+            )
+        )
+        self.last_characteristic_maximum_eigenpair_residual = max(
+            self.last_characteristic_maximum_eigenpair_residual,
+            eigenpair_residual,
+        )
+        if eigenpair_residual > 2.0e-5:
+            raise FloatingPointError(
+                "full Carter degenerate eigenspace residual is too large: "
+                f"residual={eigenpair_residual:.3e}"
+            )
+        physical_condition = np.linalg.cond(eigenvectors)
+        maximum_condition = float(np.max(physical_condition))
+        if (
+            not np.isfinite(maximum_condition)
+            or maximum_condition
+            >= self.master_parameters.characteristic_condition_limit
+        ):
+            raise FloatingPointError(
+                "full Carter eigenvectors are ill-conditioned: "
+                f"condition={maximum_condition:.3e}"
+            )
+        sorted_gap = np.diff(eigenvalues, axis=-1)
+        self.last_characteristic_minimum_separation = min(
+            self.last_characteristic_minimum_separation,
+            float(np.min(np.abs(sorted_gap))),
+        )
+        self.last_characteristic_maximum_speed = max(
+            self.last_characteristic_maximum_speed,
+            float(np.max(np.abs(eigenvalues))),
+        )
+        right_physical = np.moveaxis(
+            eigenvectors, (-2, -1), (0, 1)
+        )
+        face_time = 0.5 * (
+            time_jacobian
+            + self._roll(time_jacobian, -1, axis)
+        )
+        inverse_face_time = np.linalg.inv(
+            np.moveaxis(face_time, (0, 1), (-2, -1))
+        )
+        primitive_modes = np.moveaxis(
+            inverse_face_time
+            @ np.moveaxis(
+                right_physical, (0, 1), (-2, -1)
+            ),
+            (-2, -1),
+            (0, 1),
+        )
+        _, _, sqrt_h = inverse_metric(h)
+        W_N = lorentz_factor(h, recovery.fluid.velocity)
+        D_N = sqrt_h * recovery.fluid.baryon_density * W_N
+        q_N = primitive[1:4]
+        hq_N = np.einsum("ij...,j...->i...", h, q_N)
+        entropy_jacobian = np.zeros((9,) + self.grid.shape)
+        entropy_jacobian[0] = (
+            recovery.entropy_per_baryon * D_N
+        )
+        entropy_jacobian[1:4] = (
+            recovery.entropy_per_baryon[None, ...]
+            * D_N[None, ...]
+            * hq_N
+            / np.maximum(W_N[None, ...] ** 2, 1.0e-300)
+        )
+        entropy_jacobian[8] = D_N
+        face_entropy_jacobian = 0.5 * (
+            entropy_jacobian
+            + self._roll(entropy_jacobian, -1, axis)
+        )
+        entropy_modes = np.einsum(
+            "a...,ab...->b...",
+            face_entropy_jacobian,
+            primitive_modes,
+        )
+        tracer = (
+            state.matter.tracer
+            / np.maximum(state.matter.D, 1.0e-300)
+        )
+        face_tracer = 0.5 * (
+            tracer + self._roll(tracer, -1, axis)
+        )
+        right = np.zeros((11, 11) + self.grid.shape)
+        right[:9, :9] = right_physical
+        right[9, :9] = entropy_modes
+        right[10, :9] = (
+            face_tracer[None, ...] * right_physical[0]
+        )
+        right[9, 9] = 1.0
+        right[10, 10] = 1.0
+        transport_N = (
+            state.geometry.lapse * recovery.fluid.velocity[axis]
+            - state.geometry.shift[axis]
+        )
+        face_transport_N = 0.5 * (
+            transport_N + self._roll(transport_N, -1, axis)
+        )
+        full_eigenvalues = np.concatenate(
+            (
+                np.moveaxis(eigenvalues, -1, 0),
+                face_transport_N[None, ...],
+                face_transport_N[None, ...],
+            ),
+            axis=0,
+        )
+        full_batch = np.moveaxis(right, (0, 1), (-2, -1))
+        full_batch /= np.maximum(
+            np.linalg.norm(full_batch, axis=-2)[..., None, :],
+            1.0e-300,
+        )
+        right = np.moveaxis(full_batch, (-2, -1), (0, 1))
+        full_condition = float(np.max(np.linalg.cond(full_batch)))
+        self.last_characteristic_condition_number = max(
+            self.last_characteristic_condition_number,
+            full_condition,
+        )
+        if (
+            not np.isfinite(full_condition)
+            or full_condition
+            >= self.master_parameters.characteristic_condition_limit
+        ):
+            raise FloatingPointError(
+                "extended Carter eigenvectors are ill-conditioned: "
+                f"condition={full_condition:.3e}"
+            )
+        left = np.moveaxis(
+            np.linalg.inv(full_batch), (-2, -1), (0, 1)
+        )
+        full_path = np.zeros((11, 11) + self.grid.shape)
+        full_path[:9, :9] = face_path
+        return right, left, full_path, full_eigenvalues
+
+    def _conservative_rhs(self, state, recovery, h, K):
+        """Couple all Carter principal fields in one characteristic block."""
+        if (
+            self.production_parameters.flux_reconstruction
+            not in {"full_carter_weno5_z", "full_carter_roe"}
+            or not getattr(self.grid, "is_periodic", True)
+            or self._force_first_order
+        ):
+            self._full_carter_target_rhs_cache = None
+            return super()._conservative_rhs(state, recovery, h, K)
+
+        lapse = state.geometry.lapse
+        shift = state.geometry.shift
+        h_inv, _, sqrt_h = inverse_metric(h)
+        total = recovery.total_stress
+        total_momentum_up = np.einsum(
+            "ij...,j...->i...", h_inv, total.momentum
+        )
+        total_stress_mixed = np.einsum(
+            "ik...,kj...->ij...", h_inv, total.stress
+        )
+        transport_N = lapse[None, ...] * recovery.fluid.velocity - shift
+        transport_D = (
+            lapse[None, ...] * recovery.carrier.velocity - shift
+        )
+        D_D = (
+            state.target_charge
+            / self.master_parameters.carrier_charge
+        )
+        conserved = np.concatenate(
+            (
+                state.matter.D[None, ...],
+                D_D[None, ...],
+                state.matter.momentum,
+                state.matter.energy[None, ...],
+                state.target_current,
+                state.matter.entropy[None, ...],
+                state.matter.tracer[None, ...],
+            ),
+            axis=0,
+        )
+        full_derivative = np.zeros_like(conserved)
+        for axis in range(self.grid.ndim):
+            flux = np.concatenate(
+                (
+                    (
+                        state.matter.D * transport_N[axis]
+                    )[None, ...],
+                    (D_D * transport_D[axis])[None, ...],
+                    (
+                        sqrt_h[None, ...]
+                        * (
+                            lapse[None, ...]
+                            * total_stress_mixed[axis]
+                            - shift[axis][None, ...]
+                            * total.momentum
+                        )
+                    ),
+                    (
+                        sqrt_h
+                        * (
+                            lapse * total_momentum_up[axis]
+                            - shift[axis] * total.rho
+                        )
+                    )[None, ...],
+                    state.target_current * transport_D[axis],
+                    (
+                        state.matter.entropy
+                        * transport_N[axis]
+                    )[None, ...],
+                    (
+                        state.matter.tracer
+                        * transport_N[axis]
+                    )[None, ...],
+                ),
+                axis=0,
+            )
+            right, left, path_symbol, eigenvalues = (
+                self._full_carter_characteristic_basis(
+                    state, recovery, h, axis
+                )
+            )
+            speed = self._speed_bound(
+                recovery, h, lapse, shift, axis
+            )
+            if (
+                self.production_parameters.flux_reconstruction
+                == "full_carter_weno5_z"
+            ):
+                high_interface = self._characteristic_weno_interface(
+                    flux,
+                    conserved,
+                    speed,
+                    axis,
+                    right,
+                    left,
+                )
+            else:
+                jump = self._roll(conserved, -1, axis) - conserved
+                characteristic_jump = np.einsum(
+                    "ab...,b...->a...", left, jump
+                )
+                face_speed = np.maximum(
+                    speed, self._roll(speed, -1, axis)
+                )
+                dissipation_rates = (
+                    0.5 * np.abs(eigenvalues)
+                    + 0.5 * face_speed[None, ...]
+                )
+                dissipation = np.einsum(
+                    "ab...,b...->a...",
+                    right,
+                    dissipation_rates * characteristic_jump,
+                )
+                high_interface = 0.5 * (
+                    flux + self._roll(flux, -1, axis)
+                ) - 0.5 * dissipation
+            low_interface = self._piecewise_rusanov_interface(
+                flux, conserved, speed, axis
+            )
+            density_floor = (
+                sqrt_h
+                * self.grhd.parameters.density_floor
+                * self.production_parameters.positivity_floor_factor
+            )
+            carrier_floor = (
+                sqrt_h
+                * self.master_parameters.carrier_floor
+                * self.production_parameters.positivity_floor_factor
+            )
+            energy_floor = (
+                sqrt_h
+                * self.grhd.parameters.density_floor
+                * self.grhd.parameters.internal_energy_floor
+                * self.production_parameters.positivity_floor_factor
+            )
+            interface = self._positivity_blend_interfaces(
+                high_interface,
+                low_interface,
+                conserved,
+                axis,
+                density_floor,
+                metric_inverse=h_inv,
+                energy_index=5,
+                momentum_slice=slice(2, 5),
+                energy_floor=energy_floor,
+                additional_density_floors=((1, carrier_floor),),
+            )
+            jump = self._roll(conserved, -1, axis) - conserved
+            path_jump = np.einsum(
+                "ab...,b...->a...", path_symbol, jump
+            )
+            full_derivative += self._interface_divergence(
+                interface, axis
+            )
+            full_derivative -= 0.5 * (
+                path_jump + self._roll(path_jump, 1, axis)
+            ) / self.grid.spacing[axis]
+
+        derivatives = [
+            full_derivative[0],
+            full_derivative[2:5],
+            full_derivative[5],
+            full_derivative[9],
+            full_derivative[10],
+        ]
+        self._full_carter_target_rhs_cache = (
+            (
+                self.master_parameters.carrier_charge
+                * full_derivative[1]
+            ),
+            full_derivative[6:9],
+        )
+
+        total_stress_up = np.einsum(
+            "ik...,jl...,kl...->ij...", h_inv, h_inv, total.stress
+        )
+        gradient_lapse = self.grid.gradient(lapse)
+        derivatives[2] += sqrt_h * (
+            lapse
+            * np.einsum("ij...,ij...->...", K, total_stress_up)
+            - np.einsum(
+                "i...,i...->...",
+                total_momentum_up,
+                gradient_lapse,
+            )
+        )
+        for component in range(3):
+            source = -total.rho * gradient_lapse[component]
+            if component < self.grid.ndim:
+                for index in range(3):
+                    source += total.momentum[index] * self.grid.derivative(
+                        shift[index], component
+                    )
+                    for other in range(3):
+                        source += (
+                            0.5
+                            * lapse
+                            * total_stress_up[index, other]
+                            * self.grid.derivative(
+                                h[index, other], component
+                            )
+                        )
+            derivatives[1][component] += sqrt_h * source
+        return tuple(derivatives)
+
+    def _carrier_characteristic_basis(
+        self,
+        recovery: Theory33Recovery,
+        axis: int,
+    ) -> tuple[Array, Array]:
+        """Frozen Carter charge/canonical-momentum characteristic basis."""
+        size = 4
+        right = np.zeros((size, size) + self.grid.shape)
+        for component in range(size):
+            right[component, component] = 1.0
+        normal_index = 1 + axis
+        sound = np.full(
+            self.grid.shape,
+            np.clip(
+                self.master_parameters.carrier_sound_speed,
+                1.0e-4,
+                1.0 - 1.0e-10,
+            ),
+        )
+        impedance = 0.5 * (
+            np.abs(recovery.master.B_D)
+            + np.abs(self._roll(recovery.master.B_D, -1, axis))
+        )
+        impedance = np.clip(impedance, 1.0e-6, 1.0e6)
+        wave_scale = impedance * sound
+        norm = np.sqrt(1.0 + wave_scale**2)
+        right[:, [0, normal_index]] = 0.0
+        right[0, 0] = 1.0 / norm
+        right[normal_index, 0] = -wave_scale / norm
+        right[0, normal_index] = 1.0 / norm
+        right[normal_index, normal_index] = wave_scale / norm
+        batch = np.moveaxis(right, (0, 1), (-2, -1))
+        inverse = np.linalg.inv(batch)
+        self.last_characteristic_condition_number = max(
+            self.last_characteristic_condition_number,
+            float(np.max(np.linalg.cond(batch))),
+        )
+        return right, np.moveaxis(inverse, (-2, -1), (0, 1))
+
+    def _target_rhs(self, state, recovery, h, K):
+        del K
+        lapse = state.geometry.lapse
+        shift = state.geometry.shift
+        sqrt_h = inverse_metric(h)[2]
+        if (
+            self.production_parameters.flux_reconstruction
+            in {"full_carter_weno5_z", "full_carter_roe"}
+            and self._full_carter_target_rhs_cache is not None
+        ):
+            dcharge, dmomentum = (
+                np.array(self._full_carter_target_rhs_cache[0], copy=True),
+                np.array(self._full_carter_target_rhs_cache[1], copy=True),
+            )
+            drive_power, drive_force = self.system.drive_exchange(
+                h,
+                state.b,
+                state.pi_B,
+                recovery.target_charge_eulerian,
+                recovery.target_current_up,
+            )
+            del drive_power
+            dmomentum += (
+                lapse[None, ...]
+                * sqrt_h[None, ...]
+                * drive_force
+            )
+            return dcharge, dmomentum
+        transport_D = lapse[None, ...] * recovery.carrier.velocity - shift
+        dcharge = np.zeros_like(state.target_charge)
+        dmomentum = np.zeros_like(state.target_current)
+        speed = None
+        for axis in range(self.grid.ndim):
+            flux_charge = state.target_charge * transport_D[axis]
+            flux_momentum = state.target_current * transport_D[axis]
+            speed = self._speed_bound(recovery, h, lapse, shift, axis)
+            if (
+                self.production_parameters.flux_reconstruction
+                == "characteristic_weno5_z"
+                and getattr(self.grid, "is_periodic", True)
+                and not self._force_first_order
+            ):
+                conserved_block = np.concatenate(
+                    (
+                        state.target_charge[None, ...],
+                        state.target_current,
+                    ),
+                    axis=0,
+                )
+                flux_block = np.concatenate(
+                    (flux_charge[None, ...], flux_momentum), axis=0
+                )
+                right_basis, left_basis = self._carrier_characteristic_basis(
+                    recovery, axis
+                )
+                high_interface = self._characteristic_weno_interface(
+                    flux_block,
+                    conserved_block,
+                    speed,
+                    axis,
+                    right_basis,
+                    left_basis,
+                )
+                low_interface = self._piecewise_rusanov_interface(
+                    flux_block, conserved_block, speed, axis
+                )
+                charge_floor = (
+                    sqrt_h
+                    * self.master_parameters.carrier_floor
+                    * self.master_parameters.carrier_charge
+                    * self.production_parameters.positivity_floor_factor
+                )
+                interface = self._positivity_blend_interfaces(
+                    high_interface,
+                    low_interface,
+                    conserved_block,
+                    axis,
+                    charge_floor,
+                )
+                charge_interface = interface[0]
+                momentum_interface = interface[1:4]
+            else:
+                charge_interface = self._rusanov_interface(
+                    flux_charge, state.target_charge, speed, axis
+                )
+                momentum_interface = self._rusanov_interface(
+                    flux_momentum, state.target_current, speed, axis
+                )
+            if getattr(self.grid, "is_periodic", True):
+                dcharge += self._interface_divergence(charge_interface, axis)
+                dmomentum += self._interface_divergence(momentum_interface, axis)
+            else:
+                lower_charge = self._outgoing_boundary_flux(flux_charge, transport_D[axis], axis, -1)
+                upper_charge = self._outgoing_boundary_flux(flux_charge, transport_D[axis], axis, 1)
+                lower_momentum = self._outgoing_boundary_flux(flux_momentum, transport_D[axis], axis, -1)
+                upper_momentum = self._outgoing_boundary_flux(flux_momentum, transport_D[axis], axis, 1)
+                dcharge += self._interface_divergence(charge_interface, axis, lower_charge, upper_charge)
+                dmomentum += self._interface_divergence(momentum_interface, axis, lower_momentum, upper_momentum)
+
+        chi_down = recovery.master.carrier_momentum_down
+        chi_zero = -lapse * recovery.master.carrier_momentum_normal + np.einsum(
+            "i...,i...->...", shift, chi_down
+        )
+        carrier_density_eulerian = recovery.master.carrier_eulerian_density
+        for component in range(self.grid.ndim):
+            source = self._path_product(
+                carrier_density_eulerian, chi_zero, component
+            )
+            for axis in range(self.grid.ndim):
+                source += self._path_product(
+                    carrier_density_eulerian * transport_D[axis],
+                    chi_down[axis],
+                    component,
+                )
+            dmomentum[component] += sqrt_h * source
+        drive_power, drive_force = self.system.drive_exchange(
+            h,
+            state.b,
+            state.pi_B,
+            recovery.target_charge_eulerian,
+            recovery.target_current_up,
+        )
+        del drive_power
+        dmomentum += lapse[None, ...] * sqrt_h[None, ...] * drive_force
+        return dcharge, dmomentum
+
+    def carrier_boundary_number_outflow_rate(
+        self,
+        state: Theory3ProductionState,
+        recovery: Theory33Recovery | None = None,
+    ) -> float:
+        """Return the outward carrier-number flux through all physical faces.
+
+        This uses the same outgoing-only boundary flux as ``_target_rhs``.
+        Positive values mean carrier number is leaving the Cartesian patch.
+        """
+        if getattr(self.grid, "is_periodic", True):
+            return 0.0
+        recovery = self.recover(state) if recovery is None else recovery
+        h, _ = self.ccz4.physical_geometry(state.geometry)
+        lapse = state.geometry.lapse
+        shift = state.geometry.shift
+        transport = lapse[None, ...] * recovery.carrier.velocity - shift
+        charge_outflow = 0.0
+        for axis in range(self.grid.ndim):
+            flux = state.target_charge * transport[axis]
+            lower = self._outgoing_boundary_flux(
+                flux, transport[axis], axis, -1
+            )
+            upper = self._outgoing_boundary_flux(
+                flux, transport[axis], axis, 1
+            )
+            face_area = self.grid.cell_volume / self.grid.spacing[axis]
+            charge_outflow += face_area * float(np.sum(upper) - np.sum(lower))
+        return charge_outflow / self.master_parameters.carrier_charge
+
+    def rhs(self, time: float, values: tuple[Array, ...]) -> tuple[Array, ...]:
+        state = self._unpack(values, time)
+        recovery = self.recover(state)
+        h, K = self.ccz4.physical_geometry(state.geometry)
+        sources = (
+            recovery.total_stress.rho,
+            recovery.total_stress.momentum,
+            recovery.total_stress.stress,
+        )
+        geometry_rhs = self.ccz4.rhs(time, values[:9], sources)
+        matter_rhs = list(self._conservative_rhs(state, recovery, h, K))
+        target_charge_rhs, target_momentum_rhs = self._target_rhs(
+            state, recovery, h, K
+        )
+        field_rhs = self.system.rhs_fields(
+            h,
+            state.a,
+            state.pi_A,
+            state.b,
+            state.pi_B,
+            state.longitudinal_A,
+            state.longitudinal_B,
+            state.cleaning_A,
+            state.cleaning_B,
+            recovery.target_charge_eulerian,
+            recovery.target_current_up,
+            state.geometry.lapse,
+            state.geometry.shift,
+            self.production_parameters.cleaning_damping,
+        )
+        if not getattr(self.grid, "is_periodic", True):
+            from .boundary import Theory3CharacteristicBoundary
+
+            field_rhs = Theory3CharacteristicBoundary(self.grid).mixed_proca_rhs(
+                self.system, h, state, field_rhs
+            )
+        return geometry_rhs + tuple(matter_rhs) + field_rhs + (
+            target_charge_rhs,
+            target_momentum_rhs,
+        )
+
+    def _apply_carrier_drag(
+        self, state: Theory3ProductionState, dt: float
+    ) -> Theory3ProductionState:
+        """Apply an unconditionally stable local relative-rapidity decay.
+
+        The collision solve preserves both number densities and total material
+        energy-momentum exactly.  It solves for the entropy increase instead
+        of assigning an energy residual to a reservoir.
+        """
+        before = self.recover(state)
+        h, _ = self.ccz4.physical_geometry(state.geometry)
+        sqrt_h = inverse_metric(h)[2]
+        shape = self.grid.shape
+        count = int(np.prod(shape))
+        h_flat = h.reshape(3, 3, count)
+        sqrt_flat = sqrt_h.reshape(count)
+        D_N_flat = state.matter.D.reshape(count)
+        D_D_flat = (
+            state.target_charge / self.master_parameters.carrier_charge
+        ).reshape(count)
+        material_energy = (
+            state.matter.energy / sqrt_h - before.vector_stress.rho
+        ).reshape(count)
+        material_momentum = (
+            state.matter.momentum / sqrt_h[None, ...]
+            - before.vector_stress.momentum
+        ).reshape(3, count)
+        old_entropy = before.entropy_per_baryon.reshape(count)
+        old_relative_gamma = before.master.relative_lorentz_factor.reshape(count)
+        W_N = lorentz_factor(h, before.fluid.velocity).reshape(count)
+        W_D = lorentz_factor(h, before.carrier.velocity).reshape(count)
+        q_N_old = (W_N.reshape(shape)[None, ...] * before.fluid.velocity).reshape(3, count)
+        q_D_old = (W_D.reshape(shape)[None, ...] * before.carrier.velocity).reshape(3, count)
+        lapse_flat = state.geometry.lapse.reshape(count)
+        solved = np.empty((9, count), dtype=float)
+        entropy_increase = np.empty(count, dtype=float)
+        for cell in range(count):
+            # Below this threshold the available counterflow energy is smaller
+            # than the nonlinear solve's entropy resolution.  Treating it as
+            # exactly co-moving avoids manufacturing either sign of heat.
+            if old_relative_gamma[cell] - 1.0 <= 1.0e-3:
+                solved[:, cell] = np.concatenate(
+                    (
+                        [np.log(before.fluid.baryon_density.reshape(count)[cell])],
+                        [old_entropy[cell]],
+                        q_N_old[:, cell],
+                        [np.log(before.carrier.number_density.reshape(count)[cell])],
+                        q_D_old[:, cell],
+                    )
+                )
+                entropy_increase[cell] = 0.0
+                continue
+            decay = float(
+                np.exp(
+                    -dt
+                    * max(lapse_flat[cell], 0.0)
+                    / self.master_parameters.relaxation_time
+                )
+            )
+            relative_target = decay * (q_D_old[:, cell] - q_N_old[:, cell])
+            target = np.concatenate(
+                (
+                    [D_N_flat[cell], D_D_flat[cell]],
+                    material_momentum[:, cell],
+                    [material_energy[cell]],
+                    relative_target,
+                )
+            )
+            energy_scale = max(
+                abs(material_energy[cell]),
+                np.linalg.norm(material_momentum[:, cell]),
+                1.0e-10,
+            )
+            scale = np.array(
+                [
+                    max(abs(D_N_flat[cell]), 1.0e-10),
+                    max(abs(D_D_flat[cell]), 1.0e-10),
+                    energy_scale,
+                    energy_scale,
+                    energy_scale,
+                    energy_scale,
+                    1.0,
+                    1.0,
+                    1.0,
+                ]
+            )
+            x = np.concatenate(
+                (
+                    [np.log(before.fluid.baryon_density.reshape(count)[cell])],
+                    [old_entropy[cell]],
+                    q_N_old[:, cell],
+                    [np.log(before.carrier.number_density.reshape(count)[cell])],
+                    q_D_old[:, cell],
+                )
+            )
+
+            primitive_for_phase = np.concatenate(
+                ([x[0]], x[2:5], [x[5]], x[6:9])
+            )
+            phase_override = self._cell_phase(
+                primitive_for_phase,
+                h_flat[:, :, cell],
+                float(x[1]),
+            )
+
+            final = np.inf
+            for transition in range(
+                self.production_parameters.phase_transition_iterations + 1
+            ):
+                def function(value: np.ndarray) -> np.ndarray:
+                    primitive = np.concatenate(
+                        (
+                            [value[0]],
+                            value[2:5],
+                            [value[5]],
+                            value[6:9],
+                        )
+                    )
+                    conservative = self._cell_predictions(
+                        primitive,
+                        h_flat[:, :, cell],
+                        float(sqrt_flat[cell]),
+                        float(value[1]),
+                        phase_override,
+                    )
+                    return np.concatenate(
+                        (
+                            conservative[:6],
+                            value[6:9] - value[2:5],
+                        )
+                    )
+
+                for _ in range(
+                    self.production_parameters.recovery_iterations
+                ):
+                    residual = (function(x) - target) / scale
+                    norm = float(np.max(np.abs(residual)))
+                    if norm < 2.0e-9:
+                        break
+                    jac = self._cell_jacobian(function, x) / scale[:, None]
+                    delta = np.linalg.solve(jac, -residual)
+                    accepted = False
+                    for power in range(12):
+                        trial = x + delta * (0.5**power)
+                        trial[0] = np.clip(trial[0], -700.0, 700.0)
+                        trial[5] = np.clip(trial[5], -700.0, 700.0)
+                        if (
+                            np.max(
+                                np.abs((function(trial) - target) / scale)
+                            )
+                            < norm
+                        ):
+                            x = trial
+                            accepted = True
+                            break
+                    if not accepted:
+                        break
+                final = float(
+                    np.max(np.abs((function(x) - target) / scale))
+                )
+                primitive_final = np.concatenate(
+                    ([x[0]], x[2:5], [x[5]], x[6:9])
+                )
+                final_phase = self._cell_phase(
+                    primitive_final,
+                    h_flat[:, :, cell],
+                    float(x[1]),
+                )
+                if phase_override is None or final_phase == phase_override:
+                    break
+                self.last_phase_crossings += 1
+                if (
+                    transition
+                    >= self.production_parameters.phase_transition_iterations
+                ):
+                    raise FloatingPointError(
+                        "Theory 3.3 implicit drag branch update did not "
+                        f"settle in cell {cell}"
+                    )
+                phase_override = final_phase
+            if not np.isfinite(final) or final > 2.0e-7:
+                raise FloatingPointError(
+                    f"Theory 3.3 implicit drag solve failed in cell {cell}: {final:.3e}"
+                )
+            entropy_increase[cell] = x[1] - old_entropy[cell]
+            if entropy_increase[cell] < -2.0e-9:
+                raise FloatingPointError(
+                    "Theory 3.3 drag collision map would decrease entropy: "
+                    f"cell={cell}, delta_sigma={entropy_increase[cell]:.3e}, "
+                    f"gamma_rel={old_relative_gamma[cell]:.9f}, decay={decay:.9f}"
+                )
+            solved[:, cell] = x
+
+        density = np.exp(solved[0]).reshape(shape)
+        entropy = solved[1].reshape(shape)
+        q_N = solved[2:5].reshape((3,) + shape)
+        carrier_density = np.exp(solved[5]).reshape(shape)
+        q_D = solved[6:9].reshape((3,) + shape)
+        W_N_new = np.sqrt(
+            1.0 + np.einsum("ij...,i...,j...->...", h, q_N, q_N)
+        )
+        W_D_new = np.sqrt(
+            1.0 + np.einsum("ij...,i...,j...->...", h, q_D, q_D)
+        )
+        fluid = FluidPrimitive(
+            density,
+            np.vectorize(self._entropy_internal)(density, entropy),
+            q_N / W_N_new[None, ...],
+            before.fluid.sigma,
+        )
+        carrier = CarrierPrimitive(
+            carrier_density, q_D / W_D_new[None, ...]
+        )
+        master = self.master.evaluate(h, fluid, carrier)
+        _, carrier_momentum = self.master.conserved_carrier(h, master)
+        updated = Theory3ProductionState(
+            state.geometry,
+            Theory3MatterState(
+                state.matter.D,
+                state.matter.momentum,
+                state.matter.energy,
+                state.matter.D * entropy,
+                state.matter.tracer,
+            ),
+            state.a,
+            state.pi_A,
+            state.b,
+            state.pi_B,
+            state.longitudinal_A,
+            state.longitudinal_B,
+            state.cleaning_A,
+            state.cleaning_B,
+            state.target_charge,
+            carrier_momentum,
+            state.time,
+        )
+        self._primitive_guess = np.concatenate(
+            (
+                np.log(density)[None, ...],
+                q_N,
+                np.log(carrier_density)[None, ...],
+                q_D,
+            ),
+            axis=0,
+        )
+        self.recover(updated)
+        entropy_change_density = state.matter.D * entropy_increase.reshape(shape)
+        self.last_drag_entropy_change = float(
+            self.grid.integrate(entropy_change_density)
+        )
+        self.last_drag_heat = float(
+            self.grid.integrate(
+                sqrt_h
+                * before.master.temperature
+                * before.fluid.baryon_density
+                * entropy_increase.reshape(shape)
+            )
+        )
+        return updated
+
+    def step(
+        self, state: Theory3ProductionState, dt: float
+    ) -> Theory3ProductionState:
+        """Advance one projected split step and always release stage context."""
+        try:
+            return self._step_with_active_reconstruction(state, dt)
+        finally:
+            self._active_stage_dt = None
+
+    def _step_with_active_reconstruction(
+        self, state: Theory3ProductionState, dt: float
+    ) -> Theory3ProductionState:
+        if dt <= 0.0:
+            raise ValueError("dt must be positive")
+        entropy_before_step = float(self.grid.integrate(state.matter.entropy))
+        self.last_projection_entropy_change = 0.0
+        self.last_projection_minimum_change = 0.0
+        self.last_positivity_limited_faces = 0
+        self.last_minimum_positivity_theta = 1.0
+        self.last_characteristic_condition_number = 1.0
+        self.last_stage_positivity_fallbacks = 0
+        self.last_characteristic_maximum_imaginary_part = 0.0
+        self.last_characteristic_maximum_speed = 0.0
+        self.last_characteristic_maximum_physical_speed = 0.0
+        self.last_characteristic_minimum_separation = np.inf
+        self.last_characteristic_maximum_eigenpair_residual = 0.0
+        self._active_stage_dt = dt
+        strang = self.production_parameters.source_splitting == "strang"
+        if strang:
+            split_state = self._apply_carrier_drag(state, 0.5 * dt)
+            first_drag_heat = self.last_drag_heat
+            first_drag_entropy = self.last_drag_entropy_change
+            split_state = self._apply_damping(split_state, 0.5 * dt)
+            first_damping = self.last_damping_report
+        else:
+            split_state = state
+            first_drag_heat = 0.0
+            first_drag_entropy = 0.0
+            first_damping = FiniteDampingReport()
+        values = self._pack(split_state)
+        time = state.time
+
+        def stage(
+            base: tuple[Array, ...],
+            slope: tuple[Array, ...],
+            factor: float,
+            stage_time: float,
+        ) -> tuple[Array, ...]:
+            stage_factor = factor
+            for attempt in range(10):
+                candidate = self._unpack(
+                    tuple(
+                        y + stage_factor * dt * k
+                        for y, k in zip(base, slope)
+                    ),
+                    stage_time,
+                )
+                candidate.geometry = self.ccz4.project_algebraic(
+                    candidate.geometry
+                )
+                candidate.geometry.time = stage_time
+                try:
+                    candidate = self._project_to_master_manifold(candidate)
+                    return self._pack(candidate)
+                except FloatingPointError:
+                    if (
+                        not self.production_parameters.positivity_preserving
+                        or attempt == 9
+                    ):
+                        raise
+                    stage_factor *= 0.5
+                    self.last_stage_positivity_fallbacks += 1
+            raise AssertionError("unreachable positivity stage loop")
+
+        # Classical RK4 with a constitutive projection at every internal
+        # stage.  The projection changes only redundant entropy; all variables
+        # entering the conservative and canonical-momentum balances are left
+        # exactly as produced by RK4.
+        k1 = tuple(self.rhs(time, values))
+        y2 = stage(values, k1, 0.5, time + 0.5 * dt)
+        k2 = tuple(self.rhs(time + 0.5 * dt, y2))
+        y3 = stage(values, k2, 0.5, time + 0.5 * dt)
+        k3 = tuple(self.rhs(time + 0.5 * dt, y3))
+        y4 = stage(values, k3, 1.0, time + dt)
+        k4 = tuple(self.rhs(time + dt, y4))
+        charge_to_number = 1.0 / self.master_parameters.carrier_charge
+        stage_number_change = (
+            dt
+            * charge_to_number
+            * self.grid.integrate(k1[22] + 2.0 * k2[22] + 2.0 * k3[22] + k4[22])
+            / 6.0
+        )
+        evolved = tuple(
+            y + (dt / 6.0) * (a + 2.0 * b + 2.0 * c + d)
+            for y, a, b, c, d in zip(values, k1, k2, k3, k4)
+        )
+        final_theta = 1.0
+        for attempt in range(10):
+            final_values = tuple(
+                old + final_theta * (new - old)
+                for old, new in zip(values, evolved)
+            )
+            result = self._unpack(final_values, time + dt)
+            result.geometry = self.ccz4.project_algebraic(result.geometry)
+            result.geometry.time = result.time
+            try:
+                result = self._project_to_master_manifold(result)
+                break
+            except FloatingPointError:
+                if (
+                    not self.production_parameters.positivity_preserving
+                    or attempt == 9
+                ):
+                    raise
+                final_theta *= 0.5
+                self.last_stage_positivity_fallbacks += 1
+        result = self._apply_carrier_drag(
+            result, 0.5 * dt if strang else dt
+        )
+        if strang:
+            self.last_drag_heat += first_drag_heat
+            self.last_drag_entropy_change += first_drag_entropy
+        result = self._apply_damping(result, 0.5 * dt if strang else dt)
+        if strang:
+            second_damping = self.last_damping_report
+            self.last_damping_report = FiniteDampingReport(
+                vector_energy_change=(
+                    first_damping.vector_energy_change
+                    + second_damping.vector_energy_change
+                ),
+                vector_momentum_change=tuple(
+                    first + second
+                    for first, second in zip(
+                        first_damping.vector_momentum_change,
+                        second_damping.vector_momentum_change,
+                        strict=True,
+                    )
+                ),
+                irreversible_heat=(
+                    first_damping.irreversible_heat
+                    + second_damping.irreversible_heat
+                ),
+                total_energy_balance_error=(
+                    first_damping.total_energy_balance_error
+                    + second_damping.total_energy_balance_error
+                ),
+                maximum_gauss_change=max(
+                    first_damping.maximum_gauss_change,
+                    second_damping.maximum_gauss_change,
+                ),
+            )
+        self.recover(result)
+        actual_number_change = charge_to_number * self.grid.integrate(
+            result.target_charge - state.target_charge
+        )
+        self.last_carrier_boundary_number_outflow = -stage_number_change
+        self.last_carrier_number_change = actual_number_change
+        self.last_carrier_number_balance_residual = (
+            actual_number_change + self.last_carrier_boundary_number_outflow
+        )
+        self.last_step_entropy_change = (
+            float(self.grid.integrate(result.matter.entropy))
+            - entropy_before_step
+        )
+        if (
+            getattr(self.grid, "is_periodic", True)
+            and self.last_step_entropy_change < -1.0e-10
+        ):
+            self._active_stage_dt = None
+            raise FloatingPointError(
+                "Theory 3.3 projected finite-volume step decreased total entropy: "
+                f"delta={self.last_step_entropy_change:.3e}"
+            )
+        self._active_stage_dt = None
+        return result
+
+    def _apply_damping(self, state: Theory3ProductionState, dt: float) -> Theory3ProductionState:
+        p = self.theory_parameters
+        if p.gamma_W == 0.0 and p.gamma_B == 0.0:
+            self.last_damping_report = FiniteDampingReport()
+            return state
+        before = self.recover(state)
+        h, _ = self.ccz4.physical_geometry(state.geometry)
+        sqrt_h = inverse_metric(h)[2]
+        gauss_before = self.system.gauss_constraints(
+            h, state.pi_A, state.pi_B, state.longitudinal_A, state.longitudinal_B
+        )
+        damping = self.system.damping_step(
+            h,
+            state.a,
+            state.pi_A,
+            state.b,
+            state.pi_B,
+            state.longitudinal_A,
+            state.longitudinal_B,
+            before.fluid,
+            state.geometry.lapse,
+            dt,
+        )
+        updated = Theory3ProductionState(
+            state.geometry,
+            Theory3MatterState(
+                state.matter.D.copy(),
+                state.matter.momentum.copy(),
+                state.matter.energy.copy(),
+                state.matter.entropy.copy(),
+                state.matter.tracer.copy(),
+            ),
+            state.a,
+            damping.pi_A,
+            state.b,
+            damping.pi_B,
+            damping.longitudinal_A,
+            damping.longitudinal_B,
+            state.cleaning_A,
+            state.cleaning_B,
+            state.target_charge,
+            state.target_current,
+            state.time,
+        )
+        heated_internal = before.fluid.specific_internal_energy + damping.irreversible_heat / np.maximum(
+            before.fluid.baryon_density, 1.0e-300
+        )
+        heated = FluidPrimitive(
+            before.fluid.baryon_density,
+            heated_internal,
+            before.fluid.velocity,
+            before.fluid.sigma,
+        )
+        updated.matter.entropy = updated.matter.D * self.master.specific_entropy(
+            heated.baryon_density, heated.specific_internal_energy
+        )
+        after = self.recover(updated)
+        gauss_after = self.system.gauss_constraints(
+            h, updated.pi_A, updated.pi_B, updated.longitudinal_A, updated.longitudinal_B
+        )
+        self.last_damping_report = FiniteDampingReport(
+            vector_energy_change=float(
+                self.grid.integrate(sqrt_h * (after.vector_stress.rho - before.vector_stress.rho))
+            ),
+            vector_momentum_change=tuple(
+                self.grid.integrate(
+                    sqrt_h * (after.vector_stress.momentum[i] - before.vector_stress.momentum[i])
+                )
+                for i in range(3)
+            ),
+            irreversible_heat=float(self.grid.integrate(sqrt_h * damping.irreversible_heat)),
+            total_energy_balance_error=0.0,
+            maximum_gauss_change=max(
+                float(np.max(np.abs(gauss_after[0] - gauss_before[0]))),
+                float(np.max(np.abs(gauss_after[1] - gauss_before[1]))),
+            ),
+        )
+        return updated
+
+    def recommended_dt(self, state: Theory3ProductionState, cfl: float = 0.1) -> float:
+        self.recover(state)
+        light_dt = cfl * min(self.grid.spacing) / np.sqrt(2.0 * self.grid.ndim)
+        return min(light_dt, 0.2 * self.master_parameters.relaxation_time)
+
+    def diagnostics(self, state: Theory3ProductionState) -> dict[str, object]:
+        recovery = self.recover(state)
+        h, _ = self.ccz4.physical_geometry(state.geometry)
+        sources = (
+            recovery.total_stress.rho,
+            recovery.total_stress.momentum,
+            recovery.total_stress.stress,
+        )
+        ccz = self.ccz4.diagnostics(state.geometry, sources)
+        gauss_A, gauss_B = self.system.gauss_constraints(
+            h, state.pi_A, state.pi_B, state.longitudinal_A, state.longitudinal_B
+        )
+        D_D = state.target_charge / self.master_parameters.carrier_charge
+        return {
+            "time": state.time,
+            "hamiltonian_l2": ccz.hamiltonian_l2,
+            "momentum_l2": ccz.momentum_l2,
+            "theta_l2": ccz.theta_l2,
+            "z_l2": ccz.z_l2,
+            "gauss_A_l2": float(np.sqrt(np.mean(gauss_A**2))),
+            "gauss_B_l2": float(np.sqrt(np.mean(gauss_B**2))),
+            "baryon_mass": float(np.sum(state.matter.D) * self.grid.cell_volume),
+            "carrier_number": float(np.sum(D_D) * self.grid.cell_volume),
+            "target_charge": float(np.sum(state.target_charge) * self.grid.cell_volume),
+            "combined_energy": float(np.sum(state.matter.energy) * self.grid.cell_volume),
+            "entropy_integral": float(np.sum(state.matter.entropy) * self.grid.cell_volume),
+            "minimum_carrier_density": recovery.report.minimum_carrier_density,
+            "maximum_relative_lorentz_factor": recovery.report.maximum_relative_lorentz_factor,
+            "minimum_legendre_eigenvalue": recovery.report.minimum_legendre_eigenvalue,
+            "minimum_thermodynamic_eigenvalue": recovery.report.minimum_thermodynamic_eigenvalue,
+            "constitutive_model": recovery.master.constitutive_model,
+            "constitutive_phase_two_fraction": float(
+                np.mean(recovery.master.phase_two)
+            ),
+            "constitutive_minimum_switching_margin": float(
+                np.min(
+                    np.abs(
+                        recovery.master.relative_lorentz_factor
+                        - 1.0
+                        - recovery.master.phase_threshold
+                    )
+                )
+            )
+            if np.all(np.isfinite(recovery.master.phase_threshold))
+            else None,
+            "constitutive_variant_digest": (
+                self.constitutive_variant_digest or ""
+            ),
+            "recovery_maximum_residual": recovery.report.maximum_residual,
+            "recovery_failures": recovery.report.failed_cells,
+            "recovery_phase_crossings": recovery.report.phase_crossings,
+            "positivity_limited_faces": self.last_positivity_limited_faces,
+            "minimum_positivity_theta": self.last_minimum_positivity_theta,
+            "stage_positivity_fallbacks": self.last_stage_positivity_fallbacks,
+            "characteristic_condition_number": (
+                self.last_characteristic_condition_number
+            ),
+            "characteristic_maximum_imaginary_part": (
+                self.last_characteristic_maximum_imaginary_part
+            ),
+            "characteristic_maximum_speed": (
+                self.last_characteristic_maximum_speed
+            ),
+            "characteristic_maximum_physical_speed": (
+                self.last_characteristic_maximum_physical_speed
+            ),
+            "characteristic_maximum_eigenpair_residual": (
+                self.last_characteristic_maximum_eigenpair_residual
+            ),
+            "characteristic_minimum_separation": (
+                self.last_characteristic_minimum_separation
+                if np.isfinite(
+                    self.last_characteristic_minimum_separation
+                )
+                else None
+            ),
+            "damping_vector_energy_change": self.last_damping_report.vector_energy_change,
+            "damping_heat": self.last_damping_report.irreversible_heat,
+            "damping_gauss_change": self.last_damping_report.maximum_gauss_change,
+            "drag_heat": self.last_drag_heat,
+            "drag_entropy_change": self.last_drag_entropy_change,
+            "projection_entropy_change": self.last_projection_entropy_change,
+            "projection_minimum_entropy_density_change": self.last_projection_minimum_change,
+            "step_entropy_change": self.last_step_entropy_change,
+            "carrier_boundary_number_outflow": self.last_carrier_boundary_number_outflow,
+            "carrier_number_change": self.last_carrier_number_change,
+            "carrier_number_balance_residual": self.last_carrier_number_balance_residual,
+        }
+
+
+def save_theory33_production_state(
+    path: str | Path,
+    state: Theory3ProductionState,
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> Path:
+    g = state.geometry
+    m = state.matter
+    return save_checkpoint(
+        path,
+        metadata={"format": "tesseract.production.theory33.v1", **(metadata or {})},
+        conformal_metric=g.conformal_metric,
+        conformal_A=g.conformal_A,
+        conformal_factor=g.conformal_factor,
+        trace_K=g.trace_K,
+        theta=g.theta,
+        gamma_hat=g.gamma_hat,
+        lapse=g.lapse,
+        shift=g.shift,
+        shift_driver=g.shift_driver,
+        D=m.D,
+        total_momentum=m.momentum,
+        total_energy=m.energy,
+        entropy=m.entropy,
+        tracer=m.tracer,
+        a=state.a,
+        pi_A=state.pi_A,
+        b=state.b,
+        pi_B=state.pi_B,
+        longitudinal_A=state.longitudinal_A,
+        longitudinal_B=state.longitudinal_B,
+        cleaning_A=state.cleaning_A,
+        cleaning_B=state.cleaning_B,
+        carrier_source_charge=state.target_charge,
+        carrier_canonical_momentum=state.target_current,
+        time=state.time,
+    )
+
+
+def load_theory33_production_state(
+    path: str | Path,
+) -> tuple[Theory3ProductionState, dict[str, Any]]:
+    arrays, metadata = load_checkpoint(path)
+    if metadata.get("format") != "tesseract.production.theory33.v1":
+        raise ValueError("checkpoint is not a Theory 3.3 production v1 state")
+    time = float(arrays["time"])
+    geometry = CCZ4State(
+        arrays["conformal_metric"],
+        arrays["conformal_A"],
+        arrays["conformal_factor"],
+        arrays["trace_K"],
+        arrays["theta"],
+        arrays["gamma_hat"],
+        arrays["lapse"],
+        arrays["shift"],
+        arrays["shift_driver"],
+        time,
+    )
+    matter = Theory3MatterState(
+        arrays["D"],
+        arrays["total_momentum"],
+        arrays["total_energy"],
+        arrays["entropy"],
+        arrays["tracer"],
+    )
+    return (
+        Theory3ProductionState(
+            geometry,
+            matter,
+            arrays["a"],
+            arrays["pi_A"],
+            arrays["b"],
+            arrays["pi_B"],
+            arrays["longitudinal_A"],
+            arrays["longitudinal_B"],
+            arrays["cleaning_A"],
+            arrays["cleaning_B"],
+            arrays["carrier_source_charge"],
+            arrays["carrier_canonical_momentum"],
+            time,
+        ),
+        metadata,
+    )

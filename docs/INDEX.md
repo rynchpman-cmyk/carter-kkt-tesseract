@@ -13,8 +13,8 @@ explains the final system from the inside out.
    mixed-direction neural reverse, and piecewise BPTT.
 5. [Lyapunov conditioning](LYAPUNOV_CONDITIONING.md) — why the baseline
    explodes and how the scale-1 attractor is trained.
-6. [Visualization](VISUALIZATION.md) — the basin atlas, cobweb, KKT phase map,
-   and 4D Carter projection.
+6. [Visualization](VISUALIZATION.md) — the full-stack neural-spacetime
+   observatory, basin atlas, KKT phase map, and 4D Carter projection.
 7. [Reproducibility](REPRODUCIBILITY.md) — environments, commands, generated
    artifacts, and validation tiers.
 8. [Publishing](PUBLISHING.md) — recommended GitHub metadata and publication
@@ -29,9 +29,35 @@ explains the final system from the inside out.
     independent kinetic data, phase uncertainty, PSD mobility, event-aware
     BPTT, margin continuation, replay, and Vulkan export.
 
+12. [Numerical-relativity PDE solver](NR_PDE_SOLVER.md) — the 52-component
+    CCZ4, conservative two-current, and mixed-vector CPU reference backend.
+13. [NR PDE transplant report](../NR_PDE_TRANSPLANT_REPORT.md) — source
+    boundary, state contract, first coupled run, regression evidence, and
+    promotion gates.
+14. [Frozen neural PDE promotion](../NEURAL_PDE_PROMOTION_REPORT.md) —
+    active learned primitive recovery/RHS and the first analytic/frozen
+    continuum ladder.
+15. [Constraint-converged neural spacetime](../CONSTRAINED_NEURAL_SPACETIME_REPORT.md)
+    — compatible CMC data, full evolution, and joint CCZ4 convergence.
+16. [Neural spacetime frontier](../NEURAL_SPACETIME_FRONTIER_REPORT.md) —
+    WENO5-Z fluxes, Strang splitting, a 128-step constrained horizon, 2D
+    continuum convergence, and the complete 3D neural path.
+17. [Full Carter eigensystem and Riemann frontier](../FULL_CARTER_RIEMANN_REPORT.md)
+    — the literal flux/path Jacobian, complete conditioned eigenbasis, and
+    analytic-M1 multifluid shock ladders.
+18. [Frozen-neural phase Riemann frontier](../FROZEN_NEURAL_PHASE_RIEMANN_REPORT.md)
+    — a qualified conserved-state learned-phase corridor and converged
+    16/32/64/128-cell discontinuity with dynamic hard switching.
+
 Measured outputs are preserved separately:
 
 - [Progressive full-physics report](../FULL_PHYSICS_UNROLL_REPORT.md)
 - [Literal Lyapunov-conditioning report](../LYAPUNOV_CONDITIONING_REPORT.md)
 - [Theory 3.3 experiment report](../THEORY33_EXPERIMENT_REPORT.md)
 - [Advanced frozen-constitutive report](../THEORY33_ADVANCED_REPORT.md)
+- [NR PDE transplant report](../NR_PDE_TRANSPLANT_REPORT.md)
+- [Frozen neural PDE promotion](../NEURAL_PDE_PROMOTION_REPORT.md)
+- [Constraint-converged neural spacetime](../CONSTRAINED_NEURAL_SPACETIME_REPORT.md)
+- [Neural spacetime frontier](../NEURAL_SPACETIME_FRONTIER_REPORT.md)
+- [Full Carter eigensystem and Riemann frontier](../FULL_CARTER_RIEMANN_REPORT.md)
+- [Frozen-neural phase Riemann frontier](../FROZEN_NEURAL_PHASE_RIEMANN_REPORT.md)

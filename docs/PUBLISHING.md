@@ -54,7 +54,8 @@ gh repo edit --add-topic automatic-differentiation `
 1. Confirm that `LICENSE`, `NOTICE`, and `CITATION.cff` are current.
 2. Confirm whether portable trained weights should be publicly redistributed.
 3. Confirm the desired author identity for commits and citation metadata.
-4. Re-run `python -m unittest discover -s tests -v`.
+4. Re-run the separate NumPy NR and PyTorch constitutive commands in
+   [Reproducibility](REPRODUCIBILITY.md#1-artifactsource-checks).
 5. Re-run `.\run_conditioned_literal.ps1`.
 6. Confirm the dashboard image contains no unwanted local information.
 

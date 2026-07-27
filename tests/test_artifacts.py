@@ -93,15 +93,20 @@ class ArtifactTests(unittest.TestCase):
             "run_theory33_slang.ps1",
             "run_train_conditioned.ps1",
             "run_visualization.ps1",
+            "run_tesseract_neural_phase_riemann.ps1",
             "FULL_PHYSICS_UNROLL_REPORT.md",
             "LYAPUNOV_CONDITIONING_REPORT.md",
             "THEORY33_EXPERIMENT_REPORT.md",
             "THEORY33_ADVANCED_REPORT.md",
+            "FROZEN_NEURAL_PHASE_RIEMANN_REPORT.md",
             "theory33_experiment_results.json",
             "theory33_advanced_results.json",
             "theory33_frozen_variants.json",
             "theory33_qualified_frozen.slang",
+            "tesseract_neural_phase_riemann_results.json",
             "tesseract_conditioning_atlas.png",
+            "tesseract_full_stack_dashboard.png",
+            "tesseract_full_stack_visualizer.py",
             "docs/THEORY33_HYBRID.md",
             "theory33_hybrid.slang",
         )
@@ -118,6 +123,7 @@ class ArtifactTests(unittest.TestCase):
                 ROOT / "LYAPUNOV_CONDITIONING_REPORT.md",
                 ROOT / "THEORY33_EXPERIMENT_REPORT.md",
                 ROOT / "THEORY33_ADVANCED_REPORT.md",
+                ROOT / "FROZEN_NEURAL_PHASE_RIEMANN_REPORT.md",
             )
         )
         pattern = re.compile(r"!?\[[^\]]*\]\(([^)]+)\)")
